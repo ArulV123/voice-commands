@@ -470,12 +470,42 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
   recognition=null,finalText='',interimText='',pendingSend=false,isSending=false,waveHistory=[],waveWidth=0,
   voiceDetected=false,recognitionSettled=false,finishTimer=null,
   recognitionReady=false,recognitionWanted=false,micStreamPromise=null,pageClosing=false;
-  /* speech-capture state (fixes skipped keywords) */
+  /* speech-capture state */
   let capturing=false,lastResultTs=0,recognitionLive=false,segAlts=[];
+
+  /* Build several whole-sentence candidates from the recognition engine's n-best results.
+     This lets command matching recover when Chrome's first transcript is wrong but one of
+     its alternatives contains the actual command. */
   function getAlts(){
-    const out=[];
-    for(let k=1;k<3&&segAlts.length;k++)out.push(segAlts.map(a=>a[k]||a[0]).join(' '));
-    return out.filter(Boolean);
+    const out=[],seen=new Set();
+    const add=v=>{v=cleanTranscript(v);if(!v||seen.has(v))return;seen.add(v);out.push(v)};
+    if(segAlts.length){
+      const base=segAlts.map(x=>x[0]||'').join(' ');
+      add(base);
+      let beams=[{parts:[],score:0}];
+      for(const seg of segAlts){
+        const next=[];
+        const alts=seg.slice(0,Math.min(6,seg.length));
+        for(const b of beams){
+          for(let i=0;i<alts.length;i++){
+            const a=alts[i]||'';
+            const conf=(seg[i+'_confidence']!=null?seg[i+'_confidence']:0);
+            next.push({parts:b.parts.concat(a),score:b.score+(conf||0)+(i===0?.04:0)-i*.006});
+          }
+        }
+        next.sort((a,b)=>b.score-a.score);
+        beams=next.slice(0,14);
+      }
+      beams.forEach(b=>add(b.parts.join(' ')));
+      for(let si=0;si<segAlts.length;si++){
+        const seg=segAlts[si];
+        for(let ai=1;ai<Math.min(6,seg.length);ai++){
+          const parts=segAlts.map((x,j)=>j===si?(x[ai]||x[0]||''):(x[0]||''));
+          add(parts.join(' '));
+        }
+      }
+    }
+    return out.slice(0,20);
   }
 
   const escapeHtml=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -506,6 +536,7 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
   }
 
   function closeVoice(){
+    capturing=false;
     try{window.ZV&&window.ZV.toast('Staying on this page - just tap the mic to talk')}catch(e){}
     try{if(recorder&&recorder.state==='recording')stopRecording(false)}catch(e){}
     try{resetLocal(false)}catch(e){}
@@ -557,9 +588,10 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
 
   function resetWave(){waveHistory=[];cancelAnimationFrame(frame);const c=waveCanvas.getContext('2d');const d=window.devicePixelRatio||1;const r=waveCanvas.getBoundingClientRect();const w=Math.max(1,r.width),h=Math.max(1,r.height);waveCanvas.width=Math.floor(w*d);waveCanvas.height=Math.floor(h*d);c.setTransform(d,0,0,d,0,0);c.clearRect(0,0,w,h)}
 
-  /* ONE SpeechRecognition object for the whole page; restarted on the same object so no new permission prompts. */
+  /* ONE SpeechRecognition object for the whole page.  It is kept reusable, but it only
+     actively listens while a command is being captured. */
   function ensureRecognition(){
-    if(recognitionReady && recognition)return true;
+    if(recognitionReady&&recognition)return true;
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(!SR){recognitionSettled=true;return false;}
 
@@ -567,29 +599,56 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     recognition.continuous=true;
     recognition.interimResults=true;
     recognition.lang='en-IN';
-    recognition.maxAlternatives=3;
+    recognition.maxAlternatives=8;
 
-    recognition.onstart=()=>{recognitionLive=true;};
+    /* Chrome's contextual phrase biasing can strongly improve short fixed commands.
+       It is optional, so older implementations simply skip it. */
+    try{
+      const Phrase=window.SpeechRecognitionPhrase||window.webkitSpeechRecognitionPhrase;
+      const sources=[];
+      try{
+        if(window.ZV&&Array.isArray(window.ZV.commands))window.ZV.commands.forEach(c=>Array.isArray(c.names)&&c.names.forEach(n=>sources.push(n)));
+      }catch(e){}
+      try{
+        const custom=JSON.parse(localStorage.getItem('zippyVoiceGestures_v1')||'[]');
+        if(Array.isArray(custom))custom.forEach(g=>(g.names||[g.name]).forEach(n=>sources.push(n)));
+      }catch(e){}
+      ['zippy','wave','open hand','close hand','fist','thumbs up','thumbs down','peace sign','spiderman','i love you','call me','high five','namaste','salute','point left','point right','point up','point down','raise arm','lower arm','bend elbow','straighten elbow','rest position','stop','repeat'].forEach(x=>sources.push(x));
+      const uniq=[...new Set(sources.map(x=>normSpeechPhrase(x)).filter(Boolean))].slice(0,450);
+      if(Phrase&&('phrases' in recognition))recognition.phrases=uniq.map(x=>new Phrase(x,7));
+    }catch(e){console.debug('Speech phrase bias unavailable:',e)}
+
+    recognition.onstart=()=>{recognitionLive=true;recognitionSettled=false;};
 
     recognition.onresult=e=>{
-      if(!capturing)return;               /* keep accepting results until the tail has arrived */
+      if(!capturing)return;
       lastResultTs=Date.now();
       let i='';
       for(let n=e.resultIndex;n<e.results.length;n++){
         const r=e.results[n];
+        const alts=[];
+        for(let a=0;a<r.length;a++){
+          const tr=String(r[a].transcript||'').trim();
+          if(tr)alts.push(tr);
+          try{alts[`${a}_confidence`]=Number(r[a].confidence)||0}catch(x){}
+        }
         if(r.isFinal){
-          const alts=[];for(let a=0;a<r.length;a++)alts.push(r[a].transcript);
-          segAlts.push(alts);
-          finalText=(finalText+' '+alts[0]).replace(/\s+/g,' ').trim();
-        }else i+=r[0].transcript;
+          if(alts.length){
+            segAlts.push(alts);
+            finalText=(finalText+' '+alts[0]).replace(/\s+/g,' ').trim();
+          }
+        }else{
+          i+=(i?' ':'')+String(r[0]&&r[0].transcript||'');
+        }
       }
       interimText=i.trim();
     };
 
     recognition.onerror=err=>{
-      console.warn('SpeechRecognition error:',err&&err.error);
+      const code=err&&err.error;
+      console.warn('SpeechRecognition error:',code);
       recognitionSettled=true;
-      if(err&&(err.error==='not-allowed'||err.error==='service-not-allowed')){
+      if(code==='not-allowed'||code==='service-not-allowed'){
         stateEl.textContent='● Mic permission required';
         hint.textContent='Allow microphone access once, then try again.';
       }
@@ -598,30 +657,33 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     recognition.onend=()=>{
       recognitionLive=false;
       recognitionSettled=true;
-      if(recognitionWanted&&!pageClosing){
+      if(recognitionWanted&&capturing&&!pageClosing){
         setTimeout(()=>{
-          if(!recognitionWanted||pageClosing)return;
+          if(!recognitionWanted||!capturing||pageClosing||recognitionLive)return;
           try{recognitionSettled=false;recognition.start();}catch(e){}
-        },120);
+        },140);
       }
     };
 
     recognitionReady=true;
-    recognitionWanted=true;
     recognitionSettled=true;
     return true;
   }
 
-  /* Start recognition and wait until Chrome is really listening, so the first word is not lost. */
+  /* Normalize phrase text used for speech contextual biasing without touching command parsing. */
+  function normSpeechPhrase(v){
+    return String(v||'').toLowerCase().replace(/[’']/g,'').replace(/&/g,' and ').replace(/[^a-z0-9% ]+/g,' ').replace(/\s+/g,' ').trim();
+  }
+
   async function startRecognition(){
     if(!ensureRecognition())return false;
     recognitionWanted=true;
     if(!recognitionLive){
       try{recognitionSettled=false;recognition.start();}catch(e){}
       const t0=Date.now();
-      while(!recognitionLive&&Date.now()-t0<2500)await new Promise(r=>setTimeout(r,50));
+      while(!recognitionLive&&Date.now()-t0<3000)await new Promise(r=>setTimeout(r,50));
     }
-    return true;
+    return recognitionLive;
   }
 
   function stopRecognition(){
@@ -656,7 +718,9 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     try{
       if(!stream || !stream.getTracks().some(t=>t.readyState==='live')){
         if(!micStreamPromise){
-          micStreamPromise=navigator.mediaDevices.getUserMedia({audio:true})
+          micStreamPromise=navigator.mediaDevices.getUserMedia({
+            audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}
+          }).catch(()=>navigator.mediaDevices.getUserMedia({audio:true}))
             .then(s=>{
               stream=s;
               stream.getTracks().forEach(track=>{
@@ -676,12 +740,13 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
         stream=await micStreamPromise;
       }
 
-      await startRecognition();
+      /* Reset and enable capture BEFORE starting recognition so the first word can never
+         arrive while onresult is still ignoring events. */
+      finalText='';interimText='';segAlts=[];capturing=true;
+      chunks=[];blob=null;startedAt=Date.now();pendingSend=false;voiceDetected=false;hint.textContent='Listening…';resetWave();resizeCanvas();
 
       const mime=chooseMime();
       recorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
-      finalText='';interimText='';segAlts=[];capturing=true;
-      chunks=[];blob=null;startedAt=Date.now();pendingSend=false;voiceDetected=false;hint.textContent='Listening…';resetWave();resizeCanvas();
       recorder.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
       recorder.onstop=finishRecording;
 
@@ -704,6 +769,7 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
       recorder.start(100);
       frame=requestAnimationFrame(drawWave);
       sendBtn.classList.toggle('show',!autoSend.checked);
+      await startRecognition();
     }catch(e){
       console.error('Microphone start failed:',e);
       stateEl.textContent='● Mic permission required';
@@ -712,8 +778,10 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
   }
 
   function stopRecording(keepSendButton){
+    /* Stop future restarts, but leave capturing=true until finishRecording has collected
+       the final recognition events from Chrome. */
+    recognitionWanted=false;
     if(recorder && recorder.state==='recording')recorder.stop();
-    /* ask Chrome to flush the last words now; the same object restarts itself in onend */
     try{if(recognition&&recognitionLive)recognition.stop();}catch(e){}
     analyser=null;
     recorder=null;
@@ -726,9 +794,9 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
 
   async function finishRecording(){
     blob=new Blob(chunks,{type:'audio/webm'});
-    const t0=Date.now();lastResultTs=Math.max(lastResultTs,t0);
-    /* wait until Chrome has delivered the tail of the sentence (500ms quiet, max 1.8s) */
-    while(Date.now()-t0<1800&&Date.now()-lastResultTs<500)await new Promise(r=>setTimeout(r,100));
+    const t0=Date.now();lastResultTs=t0;
+    /* Give the speech service enough time to flush the last syllables and final result. */
+    while(Date.now()-t0<2400&&Date.now()-lastResultTs<650)await new Promise(r=>setTimeout(r,100));
     capturing=false;
     const text=cleanTranscript(finalText+' '+interimText);
     if(!hasMeaningfulTranscript(text)){
@@ -811,7 +879,7 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     finalText='';interimText='';blob=null;chunks=[];startedAt=0;voiceDetected=false;sendBtn.classList.remove('show');pendingSend=false;if(clearView){messages.innerHTML='';}hint.textContent='Tap the mic to start';stateEl.textContent='● Ready';
   }
 
-  function resetRecording(){if(recorder&&recorder.state==='recording')stopRecording(false);stopRecognition();resetLocal(false);resetWave()}
+  function resetRecording(){capturing=false;if(recorder&&recorder.state==='recording')stopRecording(false);stopRecognition();resetLocal(false);resetWave()}
 
   function renderHistory(){
     const list=readHistory();historyList.innerHTML='';
@@ -3010,15 +3078,48 @@ const norm=t=>String(t||'').toLowerCase().replace(/[\u2019']/g,'').replace(/&/g,
 const WAKE=new Set(['zippy','zippi','zippie','zipi','zipy','zippey','sippy','zeppy','ziggy','zip']);
 const LEAD=new Set('hey hi hello ok okay please kindly can could would will you just i want need to do does make show me perform give a an the lets let us go ahead now so my your for and also like'.split(' '));
 const TRAIL=/\s(?:please|now|gesture|sign|pose|action|command|for me|right now|thanks)$/;
-/* common mishearings -> the intended command word */
-const FIXES=[[/\bpiece\b|\bpeas\b|\bpeace sign\b/g,'peace'],[/\bthumb sup\b|\bthumbs app\b|\bsum up\b/g,'thumbs up'],
-  [/\bhi (?:five|5)\b|\bhigh 5\b/g,'high five'],[/\bokey\b|\boakay\b|\bo k\b/g,'okay'],[/\bwaive\b/g,'wave'],
-  [/\bill love you\b/g,'i love you']];
+/* common speech-recognition mishearings -> the intended command wording */
+const FIXES=[
+  [/\bpiece\b|\bpeas\b|\bpeace sign\b|\bpeas sign\b/g,'peace'],
+  [/\bthumbs? (?:app|up\b)/g,'thumbs up'],
+  [/\bthumbs? (?:down|dawn)\b/g,'thumbs down'],
+  [/\bhi (?:five|5)\b|\bhigh 5\b/g,'high five'],
+  [/\bokey\b|\boakay\b|\bo k\b/g,'okay'],
+  [/\bwaive\b|\bwaiv\b|\bwayve\b|\bwav(e|ing)?\b/g,'wave'],
+  [/\bopen hands?\b/g,'open hand'],
+  [/\bclose hands?\b/g,'close hand'],
+  [/\braise (?:my|the) arm\b/g,'raise arm'],
+  [/\blower (?:my|the) arm\b/g,'lower arm'],
+  [/\bput (?:my|the) arm down\b/g,'put arm down'],
+  [/\bill love you\b/g,'i love you'],
+  [/\bspider man\b/g,'spiderman']
+];
 const fix=s=>FIXES.reduce((t,[re,to])=>t.replace(re,to),s);
 const NW={zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90};
 const digits=s=>s.replace(/\b(?:(?:one|a) hundred|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?: (?:one|two|three|four|five|six|seven|eight|nine))?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b/g,m=>/hundred/.test(m)?'100':String(m.split(' ').reduce((a,w)=>a+NW[w],0)));
 function lev(a,b){const m=a.length,n=b.length;if(!m)return n;const d=[];for(let j=0;j<=n;j++)d[j]=j;
   for(let i=1;i<=m;i++){let p=d[0];d[0]=i;for(let j=1;j<=n;j++){const t=d[j];d[j]=Math.min(d[j]+1,d[j-1]+1,p+(a[i-1]===b[j-1]?0:1));p=t}}return d[n]}
+function sim(a,b){if(!a||!b)return 0;const d=lev(a,b),m=Math.max(a.length,b.length);return m?1-d/m:1}
+function commandScore(text,alias){
+  const A=norm(text),B=norm(alias);if(!A||!B)return 0;
+  if(A===B)return 1;
+  if((' '+A+' ').includes(' '+B+' '))return .985;
+  const at=A.split(' '),bt=B.split(' '),compactA=at.join(''),compactB=bt.join('');
+  let best=sim(compactA,compactB)*.94;
+  const minW=Math.max(1,bt.length-1),maxW=Math.min(at.length,bt.length+2);
+  for(let L=minW;L<=maxW;L++)for(let i=0;i+L<=at.length;i++){
+    const w=at.slice(i,i+L).join(' '),c=sim(w,B);
+    if(c>best)best=c;
+  }
+  /* Token-aware score handles harmless fillers such as "my" between command words. */
+  const tokenScores=bt.map(q=>Math.max(...at.map(a=>sim(a,q))));
+  if(tokenScores.length){
+    const avg=tokenScores.reduce((x,y)=>x+y,0)/tokenScores.length;
+    const order=bt.every((q,qi)=>at.findIndex(a=>a===q)>=0 || qi===0 || at.findIndex(a=>a===q)>=at.findIndex(a=>a===bt[qi-1]));
+    best=Math.max(best,avg*(order?.94:.88));
+  }
+  return best;
+}
 
 let INDEX=new Map(),LIST=[];
 function rebuild(){
@@ -3045,8 +3146,8 @@ function param(t){
   else if(id==='wrist-slider')pose[id]=(deg||(!unit&&v>100))?Math.min(180,v):F(id,v/100);
   else if(MAXF[id]&&deg)pose[id]=F(id,v/MAXF[id]);
   else pose[id]=pct(id);
-  const lab=m[1]+' '+v+(deg?'\u00b0':'%');
-  return{cat:'Joint',names:[lab],label:lab,steps:[st(pose)]};
+  const lab=m[1]+' '+v+(deg?'°':'%');
+  return{cat:'Joint',names:[lab],label:lab,steps:[st(pose)],score:.99};
 }
 
 const TIMES={once:1,twice:2,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10};
@@ -3057,48 +3158,80 @@ function strip(A){
     if(w.length>1&&LEAD.has(w[0]))w.shift();else break}
   return{cands,C:trail(w.join(' '))};
 }
+function fuzzyExact(A){
+  let best=null,bestScore=0,second=0;
+  for(const e of LIST){
+    const compact=e.a.replace(/ /g,'');
+    if(compact.length<4)continue;
+    const score=commandScore(A,e.a);
+    const threshold=compact.length<=5?.735:compact.length<=9?.69:.64;
+    if(score>=threshold){
+      if(score>bestScore+.0001){second=bestScore;bestScore=score;best=e}
+      else if(score>second)second=score;
+    }
+  }
+  /* Never guess from a weak/ambiguous near-match. */
+  if(best&&bestScore>=.70&&(bestScore-second>=.035||bestScore>=.88))return{cmd:best.cmd,score:bestScore};
+  return null;
+}
 function single(A){
   const {cands,C}=strip(A);let c;
-  for(const x of cands)if(c=exact(x))return{cmd:c,n:1,spd:1};
+  for(const x of cands)if(c=exact(x))return{cmd:c,n:1,spd:1,score:.99};
   let n=1,spd=1,D=C;
   const tm=/\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten) times?\b|\b(once|twice)\b/.exec(D);
   if(tm){n=Math.min(10,/^\d/.test(tm[1]||'')?parseInt(tm[1],10):TIMES[tm[1]||tm[2]]);D=D.replace(tm[0],' ')}
   if(/\b(slowly|slow)\b/.test(D)){spd=1.8;D=D.replace(/\b(slowly|slow)\b/g,' ')}
   if(/\b(quickly|fast|rapidly|quick)\b/.test(D)){spd=.55;D=D.replace(/\b(quickly|fast|rapidly|quick)\b/g,' ')}
   D=D.replace(/\s+/g,' ').trim();
-  if(D&&D!==C){for(const x of strip(D).cands)if(c=exact(x))return{cmd:c,n,spd}}
-  if(c=param(C))return{cmd:c,n:1,spd:1};
-  const q=(D||C).replace(/ /g,'');
-  if(q.length>=4){let best=null,bd=9,tie=false;
-    LIST.forEach(e=>{if(e.sq.length<4)return;const lim=e.sq.length<=5?1:e.sq.length<=9?2:3;const d=lev(q,e.sq);
-      if(d<=lim){if(d<bd){bd=d;best=e.cmd;tie=false}else if(d===bd&&e.cmd!==best)tie=true}});
-    if(best&&!tie)return{cmd:best,n,spd}}
+  if(D&&D!==C){for(const x of strip(D).cands)if(c=exact(x))return{cmd:c,n,spd,score:.99}}
+  if(c=param(C))return{cmd:c,n:1,spd:1,score:.99};
+
+  const target=D||C;
+  const f=fuzzyExact(target);
+  if(f)return{cmd:f.cmd,n,spd,score:f.score};
+
+  /* Scan useful n-grams before fuzzy matching the entire sentence. */
+  const tk=target.split(' ');
+  for(let L=Math.min(5,tk.length);L>=1;L--)for(let s=0;s+L<=tk.length;s++){
+    const ph=tk.slice(s,s+L).join(' ');
+    if(L===1&&(LEAD.has(ph)||(ph.length<3&&tk.length>2)))continue;
+    if(c=exact(ph))return{cmd:c,n,spd,score:.975};
+    const f2=fuzzyExact(ph);if(f2)return{cmd:f2.cmd,n,spd,score:f2.score};
+  }
   return null;
 }
 function resolve(text){
-  const A0=fix(norm(text)),A=A0.split(' ').filter(w=>!WAKE.has(w)).join(' ');
-  if(!A)return{wakeOnly:!!A0,items:[]};
+  const A0=fix(norm(text)),A0Words=A0.split(' ').filter(Boolean),A=A0Words.filter(w=>!WAKE.has(w)).join(' ');
+  if(!A)return{wakeOnly:!!A0,items:[],score:1};
   const wakeHeard=A0!==A;
-  const r=single(A);if(r)return{items:[r]};
+  const r=single(A);if(r)return{items:[r],score:r.score||.99};
   const parts=A.split(/\s+(?:and then|then|after that|afterwards|followed by|next|and)\s+/);
-  if(parts.length>1){const items=parts.map(single);if(items.every(Boolean))return{items}}
+  if(parts.length>1){const items=parts.map(single);if(items.every(Boolean))return{items,score:Math.min(...items.map(x=>x.score||.8))}}
   const pad=' '+A+' ';
   for(const e of LIST){if(e.sq.length>=4&&pad.includes(' '+e.a+' ')){
     const tm=/\b(\d{1,2}|two|three|four|five) times\b|\b(twice)\b/.exec(A);
-    return{items:[{cmd:e.cmd,n:tm?Math.min(10,/^\d/.test(tm[1]||'')?parseInt(tm[1],10):TIMES[tm[1]||tm[2]]):1,spd:/\bslow/.test(A)?1.8:/\b(fast|quick)/.test(A)?.55:1}]}}}
+    return{items:[{cmd:e.cmd,n:tm?Math.min(10,/^\d/.test(tm[1]||'')?parseInt(tm[1],10):TIMES[tm[1]||tm[2]]):1,spd:/\bslow/.test(A)?1.8:/\b(fast|quick)/.test(A)?.55:1}],score:.985}}}
   /* n-gram fallback: find a command phrase anywhere in the sentence */
   const tk=A.split(' ');
-  for(let L=Math.min(4,tk.length);L>=1;L--)for(let s=0;s+L<=tk.length;s++){
+  for(let L=Math.min(5,tk.length);L>=1;L--)for(let s=0;s+L<=tk.length;s++){
     const ph=tk.slice(s,s+L).join(' ');
     if(L===1&&(LEAD.has(ph)||(ph.length<3&&tk.length>2)))continue;
-    const c=exact(ph);if(c)return{items:[{cmd:c,n:1,spd:1}]};
+    const c=exact(ph);if(c)return{items:[{cmd:c,n:1,spd:1}],score:.975};
   }
-  return{items:[],wakeOnly:wakeHeard&&A.split(' ').every(w=>LEAD.has(w))};
+  return{items:[],wakeOnly:wakeHeard&&A.split(' ').every(w=>LEAD.has(w)),score:0};
 }
 
 async function handleSpeech(text,alts){
-  let r=resolve(text);
-  if(!r.items.length&&alts)for(const a of alts){const x=resolve(a);if(x.items.length){r=x;break}}
+  const candidates=[text,...(Array.isArray(alts)?alts:[])].map(x=>norm(x)).filter(Boolean);
+  const uniq=[...new Set(candidates)];
+  let r={items:[],score:0,wakeOnly:false};
+  uniq.forEach((candidate,index)=>{
+    const x=resolve(candidate);
+    if(x.items&&x.items.length){
+      const score=(x.score||.8)-(index*.004);
+      if(score>(r.score||0))r=Object.assign({},x,{score});
+    }
+  });
   if(!r.items.length)return r.wakeOnly?{ok:true,label:'Listening \u2013 say a gesture'}:{ok:false,reason:'Heard \u201c'+text+'\u201d \u2013 not a known command'};
   let steps=[],labels=[];
   for(const it of r.items){
