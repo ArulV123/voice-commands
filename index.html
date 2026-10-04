@@ -1715,6 +1715,9 @@ function stopDeviceStatus(){
   if(deviceStatusTimer){clearInterval(deviceStatusTimer);deviceStatusTimer=null;}
 }
 
+function readMainPageState(){
+  try{return JSON.parse(localStorage.getItem('zippyCrossPageState_v1')||'null');}catch(e){return null;}
+}
 async function restoreSession(user){
   if(!user){
     setSessionMessage('● Connect on Main Page');
@@ -1722,23 +1725,33 @@ async function restoreSession(user){
     return;
   }
   const email=(user.email||'').toLowerCase();
-  if(localStorage.getItem(CODE_VERIFIED_KEY)!==email){
+  const st=readMainPageState();
+  const stEmail=String((st&&st.googleUser&&st.googleUser.email)||(st&&st.verifiedEmail)||'').toLowerCase();
+  const stateOk=!!(st&&st.currentUserCode&&stEmail===email);
+  const verified=(localStorage.getItem(CODE_VERIFIED_KEY)||'').toLowerCase()===email;
+  if(!verified&&!stateOk){
     setSessionMessage('● Verify on Main Page');
     currentUserCode=null;
     return;
   }
+  /* Use the code the main page already verified, straight away */
+  if(stateOk){
+    currentUserCode=String(st.currentUserCode);
+    try{localStorage.setItem('zippyCurrentUserCode',currentUserCode);}catch(e){}
+    startDeviceStatus(currentUserCode);
+  }
   try{
     const record=await findUserRecordByEmail(email);
-    if(!record){
+    if(record){
+      currentUserCode=String(record.code);
+      try{localStorage.setItem('zippyCurrentUserCode',currentUserCode);}catch(e){}
+      startDeviceStatus(currentUserCode);
+    }else if(!stateOk){
       currentUserCode=null;
       setSessionMessage('● Account not found');
-      return;
     }
-    currentUserCode=record.code;
-    startDeviceStatus(record.code);
   }catch(err){
-    currentUserCode=null;
-    setSessionMessage('● Connection error');
+    if(!stateOk){currentUserCode=null;setSessionMessage('● Connection error');}
   }
 }
 
@@ -5500,6 +5513,7 @@ let lastCode='',chain=Promise.resolve(),token=0,speedMul=1,lastRun=null;
 function getCode(){
   let c='';try{if(typeof currentUserCode!=='undefined'&&currentUserCode)c=currentUserCode}catch(e){}
   c=c||lastCode||localStorage.getItem('zippyCurrentUserCode')||'';
+  if(!c){try{const st=JSON.parse(localStorage.getItem('zippyCrossPageState_v1')||'null');if(st&&st.currentUserCode)c=String(st.currentUserCode)}catch(e){}}
   if(!c)c=(window.prompt('Enter your Zippy device code (the same one used on the remote page):')||'').trim();
   if(c){lastCode=c;try{localStorage.setItem('zippyCurrentUserCode',c)}catch(e){}}
   return c;
@@ -5509,8 +5523,9 @@ function send(pose){
     const code=getCode();if(!code)throw new Error('Device code needed');
     const fields={};Object.keys(pose).forEach(id=>{if(FIELD[id]&&pose[id]!=null&&isFinite(pose[id]))fields[FIELD[id]]=toMotor(id,pose[id])});
     const write=()=>db.ref('users/'+code+'/command').set(Object.assign({name:'finger_angles'},fields,{ts:firebase.database.ServerValue.TIMESTAMP}));
-    try{await write()}
-    catch(e){if(!/PERMISSION_DENIED/i.test(String(e&&(e.code||e.message))))throw e;await auth.signInAnonymously();await write()}
+    try{if(auth.authStateReady)await auth.authStateReady()}catch(e){}
+    if(!auth.currentUser)throw new Error('Not signed in on this site \u2013 sign in on the main page first');
+    await write();
     return fields;
   });
   chain=run;return run;
