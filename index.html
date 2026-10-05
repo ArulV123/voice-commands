@@ -2892,7 +2892,18 @@ add('Hand signs',['wait','hold on','one moment','just a second'],H(1,0,1,1,1,{E:
 add('Hand signs',['salute','hail','salute me'],H(0,0,0,0,0,{E:.8}));
 add('Hand signs',['stop sign','palm out','talk to the hand'],H(0,0,0,0,0,{W:.5,E:.5,L:.3}));
 add('Hand signs',['high five','give me five','slap five','five up'],H(0,0,0,0,0,{E:.5,L:.6}));
-add('Hand signs',['handshake','shake hands','shake hand','nice to meet you'],H(.15,.15,.15,.15,.15,{E:.4,L:.3}));
+add('Hand signs',['handshake','shake hands','shake hand','nice to meet you'],[],{label:'Handshake',fn:ctx=>{
+  const cur=ctx&&ctx.hold&&ctx.cur&&ctx.cur['arm-slider']!=null?ctx.cur:null;
+  const clampE=x=>Math.max(68,Math.min(110,x));
+  if(cur){
+    const e=cur['arm-slider'],fin=part({T:.15,I:.15,M:.15,R:.15,P:.15});
+    const mk=x=>Object.assign({},fin,{'arm-slider':clampE(x)});
+    return{steps:[st(mk(e),500)].concat([e+7,e-7,e+7,e-7,e].map(x=>st(mk(x),260))),label:'Handshake (same position)'};
+  }
+  const base=H(.15,.15,.15,.15,.15,{E:.4,L:.3}),e=base['arm-slider'];
+  const mk=x=>Object.assign({},base,{'arm-slider':clampE(x)});
+  return{steps:[st(base,500)].concat([e+6,e-6,e+6,e-6,e].map(x=>st(mk(x),260))),label:'Handshake'};
+}});
 add('Hand signs',['namaste','pray','thank you','thanks','folded hands'],H(0,0,0,0,0,{E:.9}));
 add('Hand signs',['thinking','hmm','let me think','think'],H(1,0,1,1,1,{E:.9}));
 add('Hand signs',['shush','quiet','silence','be quiet'],H(1,0,1,1,1,{E:.85,L:.2}));
@@ -3040,7 +3051,12 @@ const WAKE=new Set(['zippy','zippi','zippie','zipi','zipy','zippey','sippy','zep
 const LEAD=new Set('hey hi hello ok okay please kindly can could would will you just i want need to do does make show me perform give a an the lets let us go ahead now so my your for and also like'.split(' '));
 const TRAIL=/\s(?:please|now|gesture|sign|pose|action|command|for me|right now|thanks)$/;
 /* common speech-recognition mishearings -> the intended command wording */
+const NUMW='one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred';
 const FIXES=[
+  [new RegExp('\\b(?:rest|rist|wrest|wrists|risk|rice)\\b(?=\\s+(?:(?:to|at|by)\\s+)?(?:left|right|center|centre|flat|straight|clockwise|anticlockwise|anti clockwise|full|max|\\d|(?:'+NUMW+')\\b))','g'),'wrist'],
+  [/\b(turn|rotate|spin|twist|move|bend|flip)\s+(?:the |my )?(?:rest|rist|wrest|risk)\b/g,'$1 wrist'],
+  [/\bfor arm\b|\bfour arm\b|\bfore arm\b|\bfor harm\b/g,'forearm'],
+  [/\bshoulder (?:left|lift) (?=\d)/g,'shoulder lift '],
   [/\bpiece\b|\bpeas\b|\bpeace sign\b|\bpeas sign\b/g,'peace'],
   [/\bthumbs? (?:app|up\b)/g,'thumbs up'],
   [/\bthumbs? (?:down|dawn)\b/g,'thumbs down'],
@@ -3094,20 +3110,32 @@ function rebuild(){
 const exact=x=>x?(INDEX.get(x)||INDEX.get(x.replace(/ /g,''))||null):null;
 
 const JN={thumb:'thumb',index:'index','index finger':'index',pointer:'index',middle:'middle','middle finger':'middle',ring:'ring','ring finger':'ring',
-  pinky:'pinky',pinkie:'pinky','little finger':'pinky',wrist:'wrist-slider',elbow:'arm-slider',forearm:'arm-slider',arm:'arm-slider',
-  shoulder:'shoulder-slider','rotation one':'shoulder-slider','rotation 1':'shoulder-slider',lift:'abduction-slider','rotation two':'abduction-slider','rotation 2':'abduction-slider',
+  pinky:'pinky',pinkie:'pinky','little finger':'pinky',wrist:'wrist-slider',elbow:'arm-slider',forearm:'arm-slider','fore arm':'arm-slider',arm:'arm-slider',
+  shoulder:'shoulder-slider','shoulder rotation':'shoulder-slider','shoulder rotate':'shoulder-slider','shoulder turn':'shoulder-slider',
+  lift:'abduction-slider','shoulder lift':'abduction-slider','shoulder raise':'abduction-slider','shoulder up':'abduction-slider','arm lift':'abduction-slider','arm raise':'abduction-slider',
   extend:'extend-slider','extend joint':'extend-slider',fingers:'ALL','all fingers':'ALL'};
-const JRE=new RegExp('^(?:(?:set|move|turn|bend|rotate|put|change) )*('+Object.keys(JN).sort((a,b)=>b.length-a.length).join('|')+')(?: finger| joint)?(?: to| at| by)? (\\d{1,3})(?: ?(percent|%|degrees?|deg))?$');
+const JSPEC=new RegExp('\\b('+Object.keys(JN).sort((a,b)=>b.length-a.length).map(k=>k.replace(/ /g,'\\s+')).join('|')+')(?:\\s+(?:finger|joint|angle|position))?(?:\\s+(?:to|at|by|around|about|of|is))*\\s*(?:the\\s+)?(\\d{1,3})(?:\\s*(percent|%|degrees?|deg))?','g');
+const TN={one:1,two:2,three:3},TENW='twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety';
+const numWords=s=>s
+  .replace(new RegExp('\\b(one|two|three)\\s+hundred(?:\\s+and)?(?:\\s+('+TENW+'))?(?:\\s+(one|two|three|four|five|six|seven|eight|nine))?\\b','g'),(m,h,t,o)=>String(TN[h]*100+(t?NW[t]:0)+(o?NW[o]:0)))
+  .replace(new RegExp('\\b(one|two|three)\\s+('+TENW+')\\b','g'),(m,h,t)=>String(TN[h]*100+NW[t]));
+/* degrees = the motor degrees shown in the Create-gesture sliders; convert back to the slider value */
+function uiFromMotor(id,m){
+  const c=CAL[id],u0=c.ui[0],u1=c.ui[1],s0=c.servo[0],s1=c.servo[1];
+  m=Math.max(Math.min(s0,s1),Math.min(Math.max(s0,s1),m));
+  if(c.neutral){const nu=c.neutral.ui,ns=c.neutral.servo;return m<=ns?nu-(nu-u0)*(m-ns)/(s0-ns):nu+(u1-nu)*(m-ns)/(s1-ns)}
+  return u0+(u1-u0)*(m-s0)/(s1-s0);
+}
 function param(t){
-  const m=JRE.exec(digits(t));if(!m)return null;
-  const id=JN[m[1]],v=Math.max(0,parseInt(m[2],10)),unit=m[3]||'',deg=/deg/.test(unit);
-  const pose={};
-  const pct=jid=>F(jid,v/100);
-  if(id==='ALL')['thumb','index','middle','ring','pinky'].forEach(j=>pose[j]=deg?F(j,v/MAXF[j]):pct(j));
-  else if(id==='wrist-slider')pose[id]=(deg||(!unit&&v>100))?Math.min(180,v):F(id,v/100);
-  else if(MAXF[id]&&deg)pose[id]=F(id,v/MAXF[id]);
-  else pose[id]=pct(id);
-  const lab=m[1]+' '+v+(deg?'°':'%');
+  const T=digits(numWords(t)),pose={},labs=[];let m;JSPEC.lastIndex=0;
+  while((m=JSPEC.exec(T))){
+    const id=JN[m[1].replace(/\s+/g,' ')],v=Math.max(0,parseInt(m[2],10)),unit=m[3]||'',deg=/deg/.test(unit)||(!unit&&v>100);
+    const ids=id==='ALL'?['thumb','index','middle','ring','pinky']:[id];
+    ids.forEach(j=>{pose[j]=deg?Math.round(uiFromMotor(j,v)*10)/10:F(j,Math.min(100,v)/100)});
+    labs.push(m[1]+' '+v+(deg?'\u00b0':'%'));
+  }
+  if(!labs.length)return null;
+  const lab=labs.join(' + ');
   return{cat:'Joint',names:[lab],label:lab,steps:[st(pose)],score:.99};
 }
 
@@ -3120,6 +3148,7 @@ function strip(A){
   return{cands,C:trail(w.join(' '))};
 }
 function fuzzyExact(A){
+  if(/^(?:wrist|forearm|elbow|shoulder|arm|lift|extend)$/.test(A))return null;
   let best=null,bestScore=0,second=0;
   for(const e of LIST){
     const compact=e.a.replace(/ /g,'');
@@ -3161,13 +3190,23 @@ function single(A){
   }
   return null;
 }
+const CONN=/\s+(?:(?:and\s+)?(?:then|after that|afterwards|followed by|next)|and)\s+/;
+const HOLD=/\b(?:in |at |with )?(?:the |that |this |current )?same (?:position|pose|place|spot)\b|\bin that (?:position|pose)\b|\bin place\b|\bthere\b|\bkeeping (?:it|that|the arm|position)\b|\bwhile holding\b/;
+const HOLDG=new RegExp(HOLD.source,'g');
+function partItem(p){
+  const hold=HOLD.test(p),t=p.replace(HOLDG,' ').replace(/\s+/g,' ').trim();
+  if(!t)return null;
+  const r=single(t);if(r)r.hold=hold;return r;
+}
 function resolve(text){
   const A0=fix(norm(text)),A0Words=A0.split(' ').filter(Boolean),A=A0Words.filter(w=>!WAKE.has(w)).join(' ');
   if(!A)return{wakeOnly:!!A0,items:[],score:1};
   const wakeHeard=A0!==A;
+  const ex=strip(A).cands.map(exact).find(Boolean);
+  if(ex)return{items:[{cmd:ex,n:1,spd:1,score:.99}],score:.99};
+  const parts=A.split(CONN);
+  if(parts.length>1){const items=parts.map(partItem);if(items.every(Boolean))return{items,score:Math.min(...items.map(x=>x.score||.8))}}
   const r=single(A);if(r)return{items:[r],score:r.score||.99};
-  const parts=A.split(/\s+(?:and then|then|after that|afterwards|followed by|next|and)\s+/);
-  if(parts.length>1){const items=parts.map(single);if(items.every(Boolean))return{items,score:Math.min(...items.map(x=>x.score||.8))}}
   const pad=' '+A+' ';
   for(const e of LIST){if(e.sq.length>=4&&pad.includes(' '+e.a+' ')){
     const tm=/\b(\d{1,2}|two|three|four|five) times\b|\b(twice)\b/.exec(A);
@@ -3195,12 +3234,15 @@ async function handleSpeech(text,alts){
   });
   if(!r.items.length)return r.wakeOnly?{ok:true,label:'Listening \u2013 say a gesture'}:{ok:false,reason:'Heard \u201c'+text+'\u201d \u2013 not a known command'};
   let steps=[],labels=[];
+  const cur={},ARMJ=['wrist-slider','arm-slider','shoulder-slider','abduction-slider','extend-slider'];let prevCat='';
   for(const it of r.items){
     let s=it.cmd.steps,label=it.cmd.label||it.cmd.names[0];
-    if(it.cmd.fn){const o=it.cmd.fn()||{};if(o.err){toast(o.err);return{ok:false,reason:o.err}}if(o.label)label=o.label;s=o.steps||[]}
+    if(it.cmd.fn){const o=it.cmd.fn({hold:!!it.hold,cur:Object.assign({},cur)})||{};if(o.err){toast(o.err);return{ok:false,reason:o.err}}if(o.label)label=o.label;s=o.steps||[]}
     if(s.length>1&&it.n>1){const rep=[];for(let k=0;k<it.n;k++)s.forEach(x=>rep.push(x));s=rep;label+=' \u00d7'+it.n}
+    if(it.hold&&!it.cmd.fn)s=s.map(x=>{const np=Object.assign({},x.pose);ARMJ.forEach(j=>{if(cur[j]!=null)np[j]=cur[j]});return{pose:np,d:x.d}});
     s=s.map(x=>({pose:x.pose,d:x.d*it.spd}));
-    if(steps.length&&s.length)steps[steps.length-1].d=Math.max(steps[steps.length-1].d||0,500);
+    if(steps.length&&s.length)steps[steps.length-1].d=Math.max(steps[steps.length-1].d||0,(prevCat==='Joint'||prevCat==='Arm')?1500:650);
+    s.forEach(x=>Object.assign(cur,x.pose));if(s.length)prevCat=it.cmd.cat;
     steps=steps.concat(s);labels.push(label);
   }
   const label=labels.join(' \u2192 ');
@@ -3236,7 +3278,7 @@ function renderCmds(){
   const cats={};customCmds().concat(CMDS).forEach(c=>{if(filter&&!(c.names.join(' ')+' '+c.cat).toLowerCase().includes(filter))return;(cats[c.cat]=cats[c.cat]||[]).push(c)});
   const total=CMDS.length,phr=CMDS.reduce((a,c)=>a+c.names.length,0);
   let h='<div class="zv-wrap"><div class="zv-intro"><b>'+total+' built-in commands</b> \u00b7 '+phr+' phrases. Say <i>\u201cHey Zippy, wave\u201d</i> or just <i>\u201cwave\u201d</i>. '+
-    'Add <i>\u201cthree times\u201d</i>, <i>\u201cslowly\u201d</i>, chain with <i>\u201cthen\u201d</i>, or set joints: <i>\u201celbow 50 percent\u201d</i>, <i>\u201cwrist 120 degrees\u201d</i>.</div>'+
+    'Add <i>\u201cthree times\u201d</i>, <i>\u201cslowly\u201d</i>, chain with <i>\u201cthen\u201d</i>, or set joints: <i>\u201celbow 50 percent\u201d</i>, <i>\u201cwrist 120 degrees\u201d</i>. Combine freely: <i>\u201copen hand and forearm 360 degrees and shoulder lift 130, then in the same position shake hand\u201d</i>.</div>'+
     '<input class="zv-search" id="zvSearch" type="search" placeholder="Search commands\u2026" value="'+esc(filter)+'">';
   Object.keys(cats).forEach(k=>{h+='<div class="zv-cat">'+esc(k)+' <span>'+cats[k].length+'</span></div>';
     cats[k].forEach(c=>{h+='<div class="zv-row"><div class="zv-name"><b>'+esc(c.names[0])+'</b><small>'+esc(c.names.slice(1,7).join(' \u00b7 '))+'</small></div>'+
