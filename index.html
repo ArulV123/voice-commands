@@ -72,7 +72,7 @@ img{max-width:100%;display:block;}
 #qtVoiceSpeakPanel:not(.active){display:none !important;}
 
 .qt-voice-messages{
-  position:absolute;inset:0 0 220px 0;width:100%;height:auto;min-height:0;max-height:none;
+  position:absolute;inset:0 0 262px 0;width:100%;height:auto;min-height:0;max-height:none;
   padding:32px 56px 28px;margin:0;overflow-y:auto;overflow-x:hidden;
   display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;gap:16px;
   box-sizing:border-box;scrollbar-width:none;-ms-overflow-style:none;scroll-behavior:smooth;
@@ -112,7 +112,7 @@ img{max-width:100%;display:block;}
 
 /* ---------- input area ---------- */
 .qt-voice-input-area{
-  position:absolute;left:0;right:0;bottom:0;width:100%;height:220px;min-height:220px;flex:none;margin:0;
+  position:absolute;left:0;right:0;bottom:0;width:100%;height:262px;min-height:262px;flex:none;margin:0;
   padding:18px 30px 24px;box-sizing:border-box;background:var(--paper);border-top:1px solid var(--line);z-index:20;
 }
 .qt-voice-input-shell{
@@ -127,6 +127,7 @@ img{max-width:100%;display:block;}
 .qt-voice-mic.recording{background:var(--ink);color:var(--paper);border-color:var(--ink);animation:zvMicPulse 1.35s ease-in-out infinite;}
 @keyframes zvMicPulse{0%,100%{box-shadow:0 0 0 0 rgba(193,74,46,0)}50%{box-shadow:0 0 0 9px rgba(193,74,46,.10)}}
 .qt-voice-mic svg{width:28px;height:28px;}
+.zv-live{width:min(760px,100%);min-height:22px;margin:10px auto 0;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .qt-voice-controls{display:flex;align-items:center;justify-content:center;gap:14px;width:100%;min-height:44px;margin-top:12px;flex-wrap:wrap;}
 .qt-voice-toggle{order:1;display:flex;align-items:center;gap:9px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-dim);cursor:pointer;user-select:none;}
 .qt-voice-toggle input{position:absolute;opacity:0;pointer-events:none;}
@@ -198,9 +199,9 @@ img{max-width:100%;display:block;}
   .zv-connection-status{padding:6px 8px;font-size:8.5px;}
   .zv-user-txt small{display:none;}
   .zv-user-txt b{max-width:90px;}
-  .qt-voice-messages{inset:0 0 206px 0;padding:20px 16px 22px;}
+  .qt-voice-messages{inset:0 0 250px 0;padding:20px 16px 22px;}
   .qt-voice-msg{width:94%;max-width:94%;}
-  .qt-voice-input-area{height:206px;min-height:206px;padding:12px 16px 18px;}
+  .qt-voice-input-area{height:250px;min-height:250px;padding:12px 16px 18px;}
   .qt-voice-input-shell{width:100%;height:100px;min-height:100px;max-height:100px;}
   .qt-voice-history{padding:16px 14px 20px;}
   .qt-voice-history-item{align-items:flex-start;flex-direction:column;}
@@ -246,6 +247,7 @@ img{max-width:100%;display:block;}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="12" rx="4"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="21"></line><line x1="9" y1="21" x2="15" y2="21"></line></svg>
             </button>
           </div>
+          <div class="zv-live" id="zvLive" aria-live="polite"></div>
           <div class="qt-voice-hint" id="qtVoiceHint">Tap the mic to start</div>
           <div class="qt-voice-controls">
             <label class="qt-voice-toggle" for="qtVoiceAutoSend"><input id="qtVoiceAutoSend" type="checkbox" checked><span class="qt-voice-switch" aria-hidden="true"></span><span>Auto send</span></label>
@@ -538,7 +540,7 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
   function closeVoice(){
     capturing=false;
     try{window.ZV&&window.ZV.toast('Staying on this page - just tap the mic to talk')}catch(e){}
-    try{if(recorder&&recorder.state==='recording')stopRecording(false)}catch(e){}
+    try{if(active){cancelled=true;stopRecording(false)}}catch(e){}
     try{resetLocal(false)}catch(e){}
     try{resetWave()}catch(e){}
   }
@@ -588,107 +590,88 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
 
   function resetWave(){waveHistory=[];cancelAnimationFrame(frame);const c=waveCanvas.getContext('2d');const d=window.devicePixelRatio||1;const r=waveCanvas.getBoundingClientRect();const w=Math.max(1,r.width),h=Math.max(1,r.height);waveCanvas.width=Math.floor(w*d);waveCanvas.height=Math.floor(h*d);c.setTransform(d,0,0,d,0,0);c.clearRect(0,0,w,h)}
 
-  /* ONE SpeechRecognition object for the whole page.  It is kept reusable, but it only
-     actively listens while a command is being captured. */
-  function ensureRecognition(){
-    if(recognitionReady&&recognition)return true;
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){recognitionSettled=true;return false;}
+  /* ================= SPEECH CAPTURE (rewritten) =================
+     Fixes: (1) mobile mic conflict - on phones the mic is given ONLY to SpeechRecognition,
+     (2) transcript is rebuilt from the full results list every event (no lost / doubled words),
+     (3) recognition starts synchronously inside the tap, (4) auto-stops ~1.3s after you finish,
+     (5) instant restart between engine sessions, (6) live transcript so you can see what it hears. */
+  const SRClass=window.SpeechRecognition||window.webkitSpeechRecognition;
+  const isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)||(navigator.maxTouchPoints>1&&/Mac/i.test(navigator.platform));
+  const useMic=!isMobile;
+  const ENDPOINT_MS=1300,IDLE_MS=9000,MAX_MS=20000;
+  let active=false,cancelled=false,heard=false,endTimer=null,idleTimer=null,maxTimer=null,restartFails=0,lastStartTs=0,committedSegs=[],fatalMsg='';
+  const liveEl=document.getElementById('zvLive');
+  const showLive=t=>{if(liveEl)liveEl.textContent=t||''};
+  function clearTimers(){clearTimeout(endTimer);clearTimeout(idleTimer);clearTimeout(maxTimer)}
+  function armEndpoint(){clearTimeout(endTimer);endTimer=setTimeout(()=>{if(active)stopRecording(!autoSend.checked)},ENDPOINT_MS)}
+  const joinSegs=()=>segAlts.map(x=>x[0]||'').join(' ').replace(/\s+/g,' ').trim();
 
-    recognition=new SR();
-    recognition.continuous=true;
+  function ensureRecognition(){
+    if(recognition)return true;
+    if(!SRClass)return false;
+    recognition=new SRClass();
+    recognition.continuous=!isMobile;   /* continuous mode is unreliable on phones */
     recognition.interimResults=true;
     recognition.lang='en-IN';
     recognition.maxAlternatives=8;
-
-    /* Chrome's contextual phrase biasing can strongly improve short fixed commands.
-       It is optional, so older implementations simply skip it. */
-    try{
-      const Phrase=window.SpeechRecognitionPhrase||window.webkitSpeechRecognitionPhrase;
-      const sources=[];
-      try{
-        if(window.ZV&&Array.isArray(window.ZV.commands))window.ZV.commands.forEach(c=>Array.isArray(c.names)&&c.names.forEach(n=>sources.push(n)));
-      }catch(e){}
-      try{
-        const custom=JSON.parse(localStorage.getItem('zippyVoiceGestures_v1')||'[]');
-        if(Array.isArray(custom))custom.forEach(g=>(g.names||[g.name]).forEach(n=>sources.push(n)));
-      }catch(e){}
-      ['zippy','wave','open hand','close hand','fist','thumbs up','thumbs down','peace sign','spiderman','i love you','call me','high five','namaste','salute','point left','point right','point up','point down','raise arm','lower arm','bend elbow','straighten elbow','rest position','stop','repeat'].forEach(x=>sources.push(x));
-      const uniq=[...new Set(sources.map(x=>normSpeechPhrase(x)).filter(Boolean))].slice(0,450);
-      if(Phrase&&('phrases' in recognition))recognition.phrases=uniq.map(x=>new Phrase(x,7));
-    }catch(e){console.debug('Speech phrase bias unavailable:',e)}
-
-    recognition.onstart=()=>{recognitionLive=true;recognitionSettled=false;};
-
+    recognition.onstart=()=>{recognitionLive=true;lastStartTs=Date.now();};
     recognition.onresult=e=>{
       if(!capturing)return;
       lastResultTs=Date.now();
-      let i='';
-      for(let n=e.resultIndex;n<e.results.length;n++){
-        const r=e.results[n];
-        const alts=[];
+      const fin=[];let interim='';
+      for(let n=0;n<e.results.length;n++){
+        const r=e.results[n],alts=[];
         for(let a=0;a<r.length;a++){
           const tr=String(r[a].transcript||'').trim();
-          if(tr)alts.push(tr);
-          try{alts[`${a}_confidence`]=Number(r[a].confidence)||0}catch(x){}
+          if(tr){alts.push(tr);alts[(alts.length-1)+'_confidence']=Number(r[a].confidence)||0;}
         }
-        if(r.isFinal){
-          if(alts.length){
-            segAlts.push(alts);
-            finalText=(finalText+' '+alts[0]).replace(/\s+/g,' ').trim();
-          }
-        }else{
-          i+=(i?' ':'')+String(r[0]&&r[0].transcript||'');
-        }
+        if(!alts.length)continue;
+        if(r.isFinal)fin.push(alts);else interim+=(interim?' ':'')+alts[0];
       }
-      interimText=i.trim();
+      segAlts=committedSegs.concat(fin);
+      finalText=joinSegs();interimText=interim;
+      const live=(finalText+' '+interimText).trim();
+      if(live){heard=true;showLive(live);armEndpoint();}
     };
-
     recognition.onerror=err=>{
       const code=err&&err.error;
       console.warn('SpeechRecognition error:',code);
-      recognitionSettled=true;
       if(code==='not-allowed'||code==='service-not-allowed'){
-        stateEl.textContent='● Mic permission required';
-        hint.textContent='Allow microphone access once, then try again.';
+        recognitionWanted=false;fatalMsg='Allow microphone access, then tap the mic again';
+        stateEl.textContent='● Mic permission required';showLive(fatalMsg);
+      }else if(code==='network'){
+        recognitionWanted=false;fatalMsg='Speech service needs internet - check your connection';
+        stateEl.textContent='● Speech service offline';showLive(fatalMsg);
+      }else if(code==='audio-capture'){
+        recognitionWanted=false;fatalMsg='No microphone found or it is used by another app';
+        stateEl.textContent='● Microphone busy';showLive(fatalMsg);
       }
     };
-
     recognition.onend=()=>{
       recognitionLive=false;
-      recognitionSettled=true;
+      if(interimText){segAlts.push([interimText]);interimText='';finalText=joinSegs();}
+      committedSegs=segAlts.slice();
       if(recognitionWanted&&capturing&&!pageClosing){
+        restartFails=(Date.now()-lastStartTs<400)?restartFails+1:0;
+        if(restartFails>5){recognitionWanted=false;fatalMsg='Speech engine keeps stopping - tap the mic again';showLive(fatalMsg);return;}
         setTimeout(()=>{
-          if(!recognitionWanted||!capturing||pageClosing||recognitionLive)return;
-          try{recognitionSettled=false;recognition.start();}catch(e){}
-        },140);
+          if(recognitionWanted&&capturing&&!recognitionLive&&!pageClosing){try{recognition.start();}catch(e){}}
+        },40);
       }
     };
-
     recognitionReady=true;
-    recognitionSettled=true;
     return true;
   }
 
-  /* Normalize phrase text used for speech contextual biasing without touching command parsing. */
-  function normSpeechPhrase(v){
-    return String(v||'').toLowerCase().replace(/[’']/g,'').replace(/&/g,' and ').replace(/[^a-z0-9% ]+/g,' ').replace(/\s+/g,' ').trim();
-  }
-
-  async function startRecognition(){
-    if(!ensureRecognition())return false;
+  function startRecognition(){
+    if(!ensureRecognition())return Promise.resolve(false);
     recognitionWanted=true;
-    if(!recognitionLive){
-      try{recognitionSettled=false;recognition.start();}catch(e){}
-      const t0=Date.now();
-      while(!recognitionLive&&Date.now()-t0<3000)await new Promise(r=>setTimeout(r,50));
-    }
-    return recognitionLive;
+    if(!recognitionLive){try{recognition.start();}catch(e){}}   /* synchronous: stays inside the tap gesture */
+    return new Promise(res=>{const t0=Date.now();(function w(){if(recognitionLive||Date.now()-t0>3000)res(recognitionLive);else setTimeout(w,50)})()});
   }
 
   function stopRecognition(){
     recognitionWanted=false;
-    recognitionSettled=true;
     if(recognition){try{recognition.stop();}catch(e){}}
     return Promise.resolve();
   }
@@ -700,118 +683,95 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     const words=t.split(' ').filter(Boolean);
     return words.some(w=>w.replace(/['\d]/g,'').length>=2) || t.replace(/[^\p{L}\p{N}]/gu,'').length>=3 || /\d/.test(t);
   };
-  function chooseMime(){const types=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'];return types.find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(t))||''}
+  function chooseMime(){const types=['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4'];return types.find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(t))||''}
 
   async function startRecording(){
-    if(recorder&&recorder.state==='recording')return;
-
+    if(active)return;
     if(!VOICE_MIC_ALLOWED_CONTEXT){
       stateEl.textContent='● Open through localhost';
       hint.textContent='Run this page with VS Code Live Server, not by opening the HTML file directly';
-      inputShell.classList.add('voice-warning');
-      showVoiceWarning();
+      inputShell.classList.add('voice-warning');showVoiceWarning();
       setTimeout(()=>inputShell.classList.remove('voice-warning'),2200);
       return;
     }
-
-    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){stateEl.textContent='● Mic unavailable';return}
-    try{
-      if(!stream || !stream.getTracks().some(t=>t.readyState==='live')){
-        if(!micStreamPromise){
-          micStreamPromise=navigator.mediaDevices.getUserMedia({
-            audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}
-          }).catch(()=>navigator.mediaDevices.getUserMedia({audio:true}))
-            .then(s=>{
-              stream=s;
-              stream.getTracks().forEach(track=>{
-                track.addEventListener('ended',()=>{
-                  if(!pageClosing){
-                    stream=null;
-                    micStreamPromise=null;
-                    stateEl.textContent='● Microphone ended';
-                    hint.textContent='Reload this page to reconnect the microphone';
-                  }
-                });
-              });
-              return s;
-            })
-            .catch(err=>{micStreamPromise=null;throw err;});
-        }
-        stream=await micStreamPromise;
-      }
-
-      /* Reset and enable capture BEFORE starting recognition so the first word can never
-         arrive while onresult is still ignoring events. */
-      finalText='';interimText='';segAlts=[];capturing=true;
-      chunks=[];blob=null;startedAt=Date.now();pendingSend=false;voiceDetected=false;hint.textContent='Listening…';resetWave();resizeCanvas();
-
-      const mime=chooseMime();
-      recorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
-      recorder.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
-      recorder.onstop=finishRecording;
-
-      const AC=window.AudioContext||window.webkitAudioContext;
-      if(AC){
-        if(!audioContext || audioContext.state==='closed') audioContext=new AC();
-        if(audioContext.state==='suspended') await audioContext.resume().catch(()=>{});
-        analyser=audioContext.createAnalyser();
-        analyser.fftSize=512;
-        analyser.smoothingTimeConstant=.58;
-        const source=audioContext.createMediaStreamSource(stream);
-        source.connect(analyser);
-      }
-
-      inputShell.classList.add('recording');
-      micBtn.classList.add('recording');
-      stateEl.textContent='● Recording';
-      hint.textContent='Listening…';
-
-      recorder.start(100);
-      frame=requestAnimationFrame(drawWave);
-      sendBtn.classList.toggle('show',!autoSend.checked);
-      await startRecognition();
-    }catch(e){
-      console.error('Microphone start failed:',e);
-      stateEl.textContent='● Mic permission required';
-      analyser=null;
+    if(!SRClass){
+      stateEl.textContent='● Not supported';
+      showLive('Voice recognition needs Chrome, Edge or Safari');
+      showVoiceWarning();return;
     }
+    finalText='';interimText='';segAlts=[];committedSegs=[];heard=false;fatalMsg='';cancelled=false;
+    capturing=true;active=true;restartFails=0;chunks=[];blob=null;startedAt=Date.now();pendingSend=false;voiceDetected=false;
+    showLive('');resetWave();
+    inputShell.classList.add('recording');micBtn.classList.add('recording');
+    stateEl.textContent='● Listening';hint.textContent='Listening…';
+    sendBtn.classList.toggle('show',!autoSend.checked);
+    clearTimers();
+    idleTimer=setTimeout(()=>{if(active&&!heard)stopRecording(false)},IDLE_MS);
+    maxTimer=setTimeout(()=>{if(active)stopRecording(!autoSend.checked)},MAX_MS);
+
+    const recP=startRecognition();   /* recognition FIRST, before anything async */
+
+    /* Waveform + audio clip only on desktop. On phones the mic is left to the speech engine. */
+    if(useMic&&navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder){
+      try{
+        if(!stream||!stream.getTracks().some(t=>t.readyState==='live')){
+          stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}})
+            .catch(()=>navigator.mediaDevices.getUserMedia({audio:true}));
+        }
+        if(!active)return;
+        resizeCanvas();
+        const mime=chooseMime();
+        recorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+        recorder.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+        recorder.onstop=finishRecording;
+        const AC=window.AudioContext||window.webkitAudioContext;
+        if(AC){
+          if(!audioContext||audioContext.state==='closed')audioContext=new AC();
+          if(audioContext.state==='suspended')await audioContext.resume().catch(()=>{});
+          analyser=audioContext.createAnalyser();analyser.fftSize=512;analyser.smoothingTimeConstant=.58;
+          audioContext.createMediaStreamSource(stream).connect(analyser);
+        }
+        recorder.start(250);
+        frame=requestAnimationFrame(drawWave);
+      }catch(e){console.warn('Waveform/recording unavailable (speech still works):',e);analyser=null;recorder=null;}
+    }
+    await recP;
   }
 
   function stopRecording(keepSendButton){
-    /* Stop future restarts, but leave capturing=true until finishRecording has collected
-       the final recognition events from Chrome. */
-    recognitionWanted=false;
-    if(recorder && recorder.state==='recording')recorder.stop();
-    try{if(recognition&&recognitionLive)recognition.stop();}catch(e){}
-    analyser=null;
-    recorder=null;
-    inputShell.classList.remove('recording');
-    micBtn.classList.remove('recording');
-    stateEl.textContent='● Ready';
-    cancelAnimationFrame(frame);
+    if(!active)return;
+    active=false;clearTimers();recognitionWanted=false;
+    try{if(recognition&&recognitionLive)recognition.stop();}catch(e){}   /* stop() (not abort) so the final result is delivered */
+    analyser=null;cancelAnimationFrame(frame);
+    inputShell.classList.remove('recording');micBtn.classList.remove('recording');
+    stateEl.textContent='● Processing';
     if(!keepSendButton)sendBtn.classList.remove('show');
+    const r=recorder;recorder=null;
+    if(r&&r.state==='recording'){try{r.stop();return;}catch(e){}}   /* onstop -> finishRecording */
+    finishRecording();
   }
 
   async function finishRecording(){
-    blob=new Blob(chunks,{type:'audio/webm'});
+    blob=chunks.length?new Blob(chunks,{type:(chunks[0]&&chunks[0].type)||'audio/webm'}):null;
     const t0=Date.now();lastResultTs=t0;
-    /* Give the speech service enough time to flush the last syllables and final result. */
-    while(Date.now()-t0<2400&&Date.now()-lastResultTs<650)await new Promise(r=>setTimeout(r,100));
+    /* wait for the engine to flush its last words and fire onend */
+    while(Date.now()-t0<2000&&(recognitionLive||Date.now()-lastResultTs<400))await new Promise(r=>setTimeout(r,80));
+    if(active)return;   /* user already started a new recording */
     capturing=false;
+    if(cancelled){cancelled=false;resetLocal(false);resetWave();showLive('');return;}
     const text=cleanTranscript(finalText+' '+interimText);
+    showLive(text);
     if(!hasMeaningfulTranscript(text)){
-      pendingSend=false;
-      sendBtn.classList.remove('show');
+      pendingSend=false;sendBtn.classList.remove('show');
       stateEl.textContent='● No voice detected';
       hint.textContent='No speech detected. Please try again.';
-      inputShell.classList.add('voice-warning');
-      showVoiceWarning();
+      inputShell.classList.add('voice-warning');showVoiceWarning();
       setTimeout(()=>inputShell.classList.remove('voice-warning'),1800);
-      resetLocal(false);
-      resetWave();
+      const msg=fatalMsg;fatalMsg='';
+      resetLocal(false);resetWave();showLive(msg);
       return;
     }
-    if(autoSend.checked||pendingSend){pendingSend=false;setTimeout(()=>sendRecording(),80);}
+    if(autoSend.checked||pendingSend){pendingSend=false;setTimeout(()=>sendRecording(),60);}
     else{sendBtn.classList.add('show');stateEl.textContent='● Ready';}
   }
 
@@ -821,6 +781,7 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     box.innerHTML='<div class="qt-voice-msg-head"><span class="qt-voice-msg-label">Audio command</span><span class="qt-voice-msg-time">'+escapeHtml(item.timeLabel||timeNow())+'</span></div><div class="qt-voice-audio-row"><button class="qt-voice-play" type="button" aria-label="Play recording"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg></button><audio class="qt-voice-audio" controls preload="metadata"></audio></div><div class="qt-voice-loader-wrap"><div class="qt-voice-loader-track"><div class="qt-voice-loader-bar"></div></div></div><div class="qt-voice-status-row"><span class="qt-voice-status">'+escapeHtml(item.status||'Sending command')+'</span><span>'+escapeHtml(item.duration||'0:01')+'</span></div><details class="qt-voice-details"><summary>Command details</summary><div class="qt-voice-detail-grid"><span class="qt-voice-detail-key">Text</span><span class="qt-voice-detail-val">'+escapeHtml(item.text||'No transcript available')+'</span><span class="qt-voice-detail-key">Sent</span><span class="qt-voice-detail-val">'+escapeHtml(fmtDate(item.iso||dateNow()))+'</span><span class="qt-voice-detail-key">Status</span><span class="qt-voice-detail-val">'+escapeHtml(item.status||'Pending')+'</span></div></details>';
     messages.appendChild(box);requestAnimationFrame(()=>{messages.scrollTop=Math.max(0,box.offsetTop-messages.clientHeight+box.offsetHeight+12)});
     const audio=box.querySelector('audio'),play=box.querySelector('.qt-voice-play'),bar=box.querySelector('.qt-voice-loader-bar');
+    if(!item.audio){const r=box.querySelector('.qt-voice-audio-row');if(r)r.style.display='none';}
     if(item.audio){audio.src=item.audio;play.addEventListener('click',()=>audio.paused?audio.play():audio.pause());audio.addEventListener('play',()=>play.innerHTML='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3v14H7zm7 0h3v14h-3z"></path></svg>');audio.addEventListener('pause',()=>play.innerHTML='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg>')}
     if(animate){bar.style.width='18%';requestAnimationFrame(()=>{bar.style.width='100%'})}
     else bar.style.width=item.status==='Sent command'?'100%':'35%';
@@ -829,12 +790,12 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
   }
 
   async function sendRecording(){
-    if(recorder&&recorder.state==='recording'){
+    if(active){
       pendingSend=true;
       stopRecording(true);
       return;
     }
-    if(!blob||isSending)return;
+    if(isSending)return;
     const text=cleanTranscript(finalText+' '+interimText);
     if(!hasMeaningfulTranscript(text)){
       stateEl.textContent='● No voice detected';
@@ -851,7 +812,7 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     sendBtn.classList.remove('show');
     stateEl.textContent='● Sending';
     let audioData='';
-    try{audioData=await dataUrlFromBlob(blob)}catch(e){}
+    try{if(blob)audioData=await dataUrlFromBlob(blob)}catch(e){}
     const item={audio:audioData,text:text||'Voice command',iso:dateNow(),timeLabel:timeNow(),duration:duration(Date.now()-startedAt),status:'Sending command',failed:false};
     const ui=addMessage(item,true);
     let ok=false;
@@ -879,7 +840,7 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     finalText='';interimText='';blob=null;chunks=[];startedAt=0;voiceDetected=false;sendBtn.classList.remove('show');pendingSend=false;if(clearView){messages.innerHTML='';}hint.textContent='Tap the mic to start';stateEl.textContent='● Ready';
   }
 
-  function resetRecording(){capturing=false;if(recorder&&recorder.state==='recording')stopRecording(false);stopRecognition();resetLocal(false);resetWave()}
+  function resetRecording(){cancelled=true;if(active)stopRecording(false);else cancelled=false;stopRecognition();clearTimers();showLive('');resetLocal(false);resetWave()}
 
   function renderHistory(){
     const list=readHistory();historyList.innerHTML='';
@@ -890,10 +851,10 @@ window.addEventListener('beforeunload',()=>stopDeviceStatus());
     });
   }
 
-  micBtn.addEventListener('click',()=>{if(recorder&&recorder.state==='recording'){if(autoSend.checked)stopRecording(false);else stopRecording(true)}else startRecording()});
+  micBtn.addEventListener('click',()=>{if(active)stopRecording(!autoSend.checked);else startRecording()});
   sendBtn.addEventListener('click',()=>{pendingSend=true;sendRecording()});
   resetBtn.addEventListener('click',resetRecording);
-  autoSend.addEventListener('change',()=>{sendBtn.classList.toggle('show',!autoSend.checked&&!!recorder&&recorder.state==='recording')});
+  autoSend.addEventListener('change',()=>{sendBtn.classList.toggle('show',!autoSend.checked&&active)});
   speakTab.addEventListener('click',()=>setTab('speak'));historyTab.addEventListener('click',()=>setTab('history'));
   closeBtn.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();closeVoice()},{capture:true});
   closeBtn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();closeVoice()},{capture:true});
