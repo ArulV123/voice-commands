@@ -2828,10 +2828,16 @@ document.getElementById('gesture-library-btn').addEventListener('click', functio
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+/* Joint mapping copied EXACTLY from the working remote-control page.
+   forearm 'arm' (D5) | shoulder turn 'shoulder' (D19)
+   sideways-lift slider -> 'extend' field (D21) | reach slider -> 'abduction' field (D18) */
 const FIELD={thumb:'thumb',index:'index',middle:'middle',ring:'ring',pinky:'pinky',
   'wrist-slider':'wrist','arm-slider':'arm','shoulder-slider':'shoulder',
-  'abduction-slider':'extend','extend-slider':'abduction'};
+  'abduction-slider':'extend',
+  'extend-slider':'abduction'};
+/* slider 0 sends 360, slider max sends 0 for these three (mounted the other way round) */
 const INVERT={'arm-slider':true,'extend-slider':true,'abduction-slider':true};
+const live={thumb:0,index:0,middle:0,ring:0,pinky:0,'wrist-slider':90,'arm-slider':68,'shoulder-slider':98,'abduction-slider':26,'extend-slider':0};
 const CAL={
   thumb:{ui:[0,90],servo:[0,180]},index:{ui:[0,100],servo:[0,180]},middle:{ui:[0,100],servo:[0,180]},
   ring:{ui:[0,100],servo:[0,180]},pinky:{ui:[0,100],servo:[0,180]},
@@ -2851,8 +2857,9 @@ const toMotor=(id,x)=>{const v=calMotor(id,x);return INVERT[id]?360-v:v};
 const REST={thumb:0,index:0,middle:0,ring:0,pinky:0,'wrist-slider':90,'arm-slider':68,'shoulder-slider':98,'abduction-slider':26,'extend-slider':0};
 const MAXF={thumb:90,index:100,middle:100,ring:100,pinky:100};
 const KEYS={T:'thumb',I:'index',M:'middle',R:'ring',P:'pinky',W:'wrist-slider',E:'arm-slider',S:'shoulder-slider',L:'abduction-slider',X:'extend-slider'};
+const WS=.3; /* wrist uses only 30% of its travel - protects the threads */
 const c01=x=>Math.max(0,Math.min(1,x));
-function F(id,f){f=c01(f);if(MAXF[id])return Math.round(MAXF[id]*f);if(id==='wrist-slider')return Math.round(180*f);
+function F(id,f){f=c01(f);if(MAXF[id])return Math.round(MAXF[id]*f);if(id==='wrist-slider')return Math.round(180*(.5+(f-.5)*WS));
   const u=CAL[id].ui;return Math.round(u[0]+(u[1]-u[0])*f)}
 function part(spec){const o={};for(const k in spec)o[KEYS[k]]=F(KEYS[k],spec[k]);return o}
 const full=spec=>Object.assign({},REST,part(spec));
@@ -2869,46 +2876,69 @@ function add(cat,names,steps,o){CMDS.push(Object.assign({cat,names,steps:Array.i
 const CNT=[[1,0,1,1,1],[1,0,0,1,1],[1,0,0,0,1],[1,0,0,0,0],[0,0,0,0,0],[1,.5,1,1,1],[1,.5,.5,1,1],[1,.5,.5,.5,1],[1,.5,.5,.5,.5],[.5,.5,.5,.5,.5]];
 const CNN=[['one','1','number one','won'],['two','2','number two','too','to','tu'],['three','3','number three','tree'],['four','4','number four','for'],
   ['five','5','number five'],['six','6','number six'],['seven','7','number seven'],['eight','8','number eight','ate'],['nine','9','number nine'],['ten','10','number ten']];
-CNT.forEach((p,i)=>add('Counting',CNN[i],H(...p)));
+const SEQ=(base,arr,d)=>arr.map(x=>st(full(Object.assign({},base,x)),d));
+const SHOW={E:.7,L:.45};   /* counting: arm lifted up and out so the number is clearly shown */
+CNT.forEach((p,i)=>add('Counting',CNN[i],H(...p,SHOW)));
 
-add('Hand signs',['fist','close hand','grab','grip','clench','punch','rock','make fist'],H(1,1,1,1,1));
-add('Hand signs',['open hand','open','open palm','release','let go','spread','paper','flat hand','palm','hand open'],H(0,0,0,0,0));
-add('Hand signs',['thumbs up','thumb up','like','good job','great','awesome','well done','approve','good','nice job'],H(0,1,1,1,1));
-add('Hand signs',['thumbs down','thumb down','dislike','bad','boo','disapprove','no way'],H(0,1,1,1,1,{W:0}));
-add('Hand signs',['peace','peace sign','victory','v sign','scissors','two fingers','bunny ears'],H(1,0,0,1,1));
-add('Hand signs',['ok sign','ok','okay','a ok','perfect','all good','fine','excellent','delicious'],H(.55,.6,0,0,0));
-add('Hand signs',['spiderman','spider man','spidey','shoot web','web shooter','cool','yo','sup','whats up','rock on','rock and roll','metal','horns','devil horns'],H(1,0,1,1,0));
-add('Hand signs',['i love you','love you','love','ily','i love u','ily sign'],H(0,0,1,1,0));
-add('Hand signs',['call me','phone','shaka','hang loose','surfs up','aloha','call'],H(0,1,1,1,0));
-add('Hand signs',['finger gun','gun','pistol','bang','pew pew','letter l'],H(0,0,1,1,1));
-add('Hand signs',['pinch','pinch grip','tweezers','precision grip','pick small'],H(.6,.65,1,1,1));
-add('Hand signs',['claw','bear claw','tiger','scary','spooky'],H(.6,.7,.7,.7,.7));
-add('Hand signs',['cup','hold ball','round grip','ball grip','hold something'],H(.35,.35,.35,.35,.35));
-add('Hand signs',['point','pointing','pointer','that one','you','over there'],H(1,0,1,1,1));
-add('Hand signs',['relax hand','relax fingers','natural hand','soft hand','calm hand'],H(.25,.25,.25,.25,.25));
-add('Hand signs',['pinky up','pinky promise','letter i','little finger up'],H(1,1,1,1,0));
-add('Hand signs',['good luck','fingers crossed','cross fingers'],H(1,.1,.35,1,1));
-add('Hand signs',['wait','hold on','one moment','just a second'],H(1,0,1,1,1,{E:.55}));
-add('Hand signs',['salute','hail','salute me'],H(0,0,0,0,0,{E:.8}));
-add('Hand signs',['stop sign','palm out','talk to the hand'],H(0,0,0,0,0,{W:.5,E:.5,L:.3}));
-add('Hand signs',['high five','give me five','slap five','five up'],H(0,0,0,0,0,{E:.5,L:.6}));
+/* BOLD choreography: forearm (E), sideways lift D21 (L), bicep turn (S), reach (X) all swing wide. Wrist stays tiny. */
+add('Hand signs',['fist','close hand','grab','grip','clench','punch','rock','make fist'],J({T:1,I:1,M:1,R:1,P:1}));
+add('Hand signs',['open hand','open','open palm','release','let go','spread','paper','flat hand','palm','hand open'],J({T:0,I:0,M:0,R:0,P:0}));
+add('Hand signs',['thumbs up','thumb up','like','good job','great','awesome','well done','approve','good','nice job'],
+  SEQ({T:0,I:1,M:1,R:1,P:1},[{E:.3,L:.2},{E:.95,L:.7,S:.15},{E:.8,L:.85,S:.15},{E:.95,L:.7,S:.15}],550));
+add('Hand signs',['thumbs down','thumb down','dislike','bad','boo','disapprove','no way'],
+  SEQ({T:0,I:1,M:1,R:1,P:1},[{E:.6,L:.4},{E:.3,L:.6,S:.9},{E:.1,L:.5,S:1}],550));
+add('Hand signs',['peace','peace sign','victory','v sign','scissors','two fingers','bunny ears'],
+  SEQ({T:1,I:0,M:0,R:1,P:1},[{E:.4,L:.3},{E:.95,L:.75,S:.1},{E:.85,L:.9,S:.35},{E:.95,L:.75,S:.1}],500));
+add('Hand signs',['ok sign','ok','okay','a ok','perfect','all good','fine','excellent','delicious'],
+  SEQ({T:.55,I:.6,M:0,R:0,P:0},[{E:.4,L:.3},{E:.95,L:.7,S:.1},{E:.8,L:.85,S:.3},{E:.95,L:.7,S:.1}],500));
+add('Hand signs',['spiderman','spider man','spidey','shoot web','web shooter','cool','yo','sup','whats up','rock on','rock and roll','metal','horns','devil horns'],
+  SEQ({T:1,I:0,M:1,R:1,P:0,E:.7,L:.85},[{E:.4,L:.3,X:0},{},{X:1},{X:.1},{X:1},{X:.1}],430));
+add('Hand signs',['i love you','love you','love','ily','i love u','ily sign'],
+  SEQ({T:0,I:0,M:1,R:1,P:0,E:.9,L:.7},[{E:.3,L:.2},{},{S:.45},{S:0},{S:.45},{S:0}],430));
+add('Hand signs',['call me','phone','shaka','hang loose','surfs up','aloha','call'],
+  SEQ({T:0,I:1,M:1,R:1,P:0},[{E:.4,L:.3},{E:1,L:.5,S:.35},{E:1,L:.5,S:.1},{E:1,L:.5,S:.35},{E:1,L:.5,S:.1}],450));
+add('Hand signs',['finger gun','gun','pistol','bang','pew pew','letter l'],
+  SEQ({T:0,I:0,M:1,R:1,P:1,L:.6},[{E:.3,L:.2,X:0},{E:.6,X:1},{E:.9,X:.8},{E:.6,X:1},{E:.9,X:.8},{E:.6,X:1}],300));
+add('Hand signs',['pinch','pinch grip','tweezers','precision grip','pick small'],J({T:.6,I:.65,M:1,R:1,P:1}));
+add('Hand signs',['claw','bear claw','tiger','scary','spooky'],
+  [[.3,.9,.3,1],[.85,.2,.85,.4],[.3,.9,.3,1],[.85,.2,.85,.4]].map((a,i)=>st(full({T:a[0],I:a[0],M:a[0],R:a[0],P:a[0],E:a[1]+.3,L:a[1]+.3,S:a[3]*.6}),420)));
+add('Hand signs',['cup','hold ball','round grip','ball grip','hold something'],J({T:.35,I:.35,M:.35,R:.35,P:.35}));
+add('Hand signs',['point','pointing','pointer','that one','you','over there'],
+  SEQ({T:1,I:0,M:1,R:1,P:1},[{E:.2,L:.4},{E:.3,L:.9,X:1},{E:.3,L:.9,X:1}],550));
+add('Hand signs',['relax hand','relax fingers','natural hand','soft hand','calm hand'],J({T:.25,I:.25,M:.25,R:.25,P:.25}));
+add('Hand signs',['pinky up','pinky promise','letter i','little finger up'],
+  SEQ({T:1,I:1,M:1,R:1,P:0},[{E:.3,L:.2},{E:.95,L:.7,S:.2},{E:.85,L:.8,S:.2}],500));
+add('Hand signs',['good luck','fingers crossed','cross fingers'],
+  SEQ({T:1,I:.1,M:.35,R:1,P:1},[{E:.3,L:.2},{E:.95,L:.7,S:.2},{E:.8,L:.8,S:.35},{E:.95,L:.7,S:.2}],500));
+add('Hand signs',['wait','hold on','one moment','just a second'],
+  SEQ({T:1,I:0,M:1,R:1,P:1,E:.85,L:.7},[{E:.4,L:.3},{},{S:.35},{S:0},{S:.35},{S:0}],380));
+add('Hand signs',['salute','hail','salute me'],
+  SEQ({T:0,I:0,M:0,R:0,P:0},[{E:.5,L:.5},{E:1,L:.85},{E:1,L:.85},{E:0,L:0}],700));
+add('Hand signs',['stop sign','palm out','talk to the hand'],
+  SEQ({T:0,I:0,M:0,R:0,P:0},[{E:.4,L:.3},{E:.8,L:.7,X:1},{E:.8,L:.7,X:1}],500));
+add('Hand signs',['high five','give me five','slap five','five up'],
+  SEQ({T:0,I:0,M:0,R:0,P:0},[{E:.3,L:.4},{E:.9,L:1,X:1},{E:.3,L:.4,X:0}],400));
 add('Hand signs',['handshake','shake hands','shake hand','nice to meet you'],[],{label:'Handshake',fn:ctx=>{
   const cur=ctx&&ctx.hold&&ctx.cur&&ctx.cur['arm-slider']!=null?ctx.cur:null;
   const clampE=x=>Math.max(68,Math.min(110,x));
   if(cur){
     const e=cur['arm-slider'],fin=part({T:.15,I:.15,M:.15,R:.15,P:.15});
     const mk=x=>Object.assign({},fin,{'arm-slider':clampE(x)});
-    return{steps:[st(mk(e),500)].concat([e+7,e-7,e+7,e-7,e].map(x=>st(mk(x),260))),label:'Handshake (same position)'};
+    return{steps:[st(mk(e),500)].concat([e+10,e-10,e+10,e-10,e].map(x=>st(mk(x),260))),label:'Handshake (same position)'};
   }
-  const base=H(.15,.15,.15,.15,.15,{E:.4,L:.3}),e=base['arm-slider'];
+  const base=H(.15,.15,.15,.15,.15,{E:.5,X:1,L:.35}),e=base['arm-slider'];
   const mk=x=>Object.assign({},base,{'arm-slider':clampE(x)});
-  return{steps:[st(base,500)].concat([e+6,e-6,e+6,e-6,e].map(x=>st(mk(x),260))),label:'Handshake'};
+  return{steps:[st(base,700)].concat([e+10,e-10,e+10,e-10,e].map(x=>st(mk(x),260))),label:'Handshake'};
 }});
-add('Hand signs',['namaste','pray','thank you','thanks','folded hands'],H(0,0,0,0,0,{E:.9}));
-add('Hand signs',['thinking','hmm','let me think','think'],H(1,0,1,1,1,{E:.9}));
-add('Hand signs',['shush','quiet','silence','be quiet'],H(1,0,1,1,1,{E:.85,L:.2}));
-add('Hand signs',['palm up','show palm','offer','offer hand','hand out'],H(.1,.1,.1,.1,.1,{W:1,E:.3}));
-add('Hand signs',['palm down','hand down','flat down'],H(0,0,0,0,0,{W:.5}));
+add('Hand signs',['namaste','pray','thank you','thanks','folded hands'],
+  SEQ({T:0,I:0,M:0,R:0,P:0},[{E:.6,L:.3},{E:1,L:.4},{E:.85,L:.3},{E:1,L:.4}],550));
+add('Hand signs',['thinking','hmm','let me think','think'],
+  SEQ({T:1,I:0,M:1,R:1,P:1},[{E:.5,L:.4},{E:1,L:.55,S:.35},{E:1,L:.55,S:.35}],600));
+add('Hand signs',['shush','quiet','silence','be quiet'],
+  SEQ({T:1,I:0,M:1,R:1,P:1},[{E:.5,L:.3},{E:1,L:.45,S:.2},{E:1,L:.45,S:.2}],550));
+add('Hand signs',['palm up','show palm','offer','offer hand','hand out'],
+  SEQ({T:.1,I:.1,M:.1,R:.1,P:.1},[{E:.4,L:.3},{E:.5,L:.5,X:.9,S:1},{E:.5,L:.5,X:.9,S:1}],550));
+add('Hand signs',['palm down','hand down','flat down'],H(0,0,0,0,0,{E:.4,X:.7,L:.3,S:0}));
 
 const FN={T:['thumb'],I:['index','pointer','index finger','pointer finger'],M:['middle','middle finger'],R:['ring','ring finger'],P:['pinky','pinkie','little finger','pinky finger','pinkie finger']};
 Object.keys(FN).forEach(k=>{
@@ -2920,52 +2950,67 @@ Object.keys(FN).forEach(k=>{
 add('Single finger',['close fingers','curl fingers','fold fingers','bend fingers','fingers down'],J({I:1,M:1,R:1,P:1}));
 add('Single finger',['open fingers','straighten fingers','fingers up','extend fingers','spread fingers'],J({I:0,M:0,R:0,P:0}));
 
-const WV={T:0,I:0,M:0,R:0,P:0,E:.55};
+const one=k=>{const o={T:0,I:0,M:0,R:0,P:0,E:.45,L:.3,X:.7};o[k]=.9;return full(o)};
+const SW=[[.8,0,.8,0,.8],[0,.8,0,.8,0],[.8,0,.8,0,.8],[0,.8,0,.8,0]];
+/* Wrist barely used: all the swing comes from forearm E, sideways lift L (D21), bicep turn S and reach X. */
 add('Motions',['wave','hello','hi','bye','goodbye','see you','wave hello','wave bye','say hi','say hello','waving'],
-  osc(WV,'W',.22,.78,3,380).concat([st(full(Object.assign({},WV,{W:.5})),0)]));
+  SEQ({T:0,I:0,M:0,R:0,P:0,E:.95,L:.9},[{E:.5,L:.4},{},{S:.85,W:.4},{S:.1,W:.6},{S:.85,W:.4},{S:.1,W:.6},{S:.85,W:.4},{S:.4,W:.5}],380).concat([st(H(0,0,0,0,0),0)]));
 add('Motions',['come here','beckon','come','come on','call over','follow me'],
-  [0,.85,0,.85,0,.85,0].map(v=>st(H(1,v,1,1,1,{E:.45}),340)));
+  SEQ({T:1,I:0,M:0,R:0,P:0,E:.6,L:.4,S:1},[{X:1},{I:1,M:1,R:1,P:1,X:.5},{X:1},{I:1,M:1,R:1,P:1,X:.5},{X:1},{I:1,M:1,R:1,P:1,X:.2}],380).concat([st(H(0,0,0,0,0),0)]));
 add('Motions',['wiggle','wiggle fingers','finger wiggle','finger dance','ocean wave'],
-  [[.8,0,.8,0,.8],[0,.8,0,.8,0],[.8,0,.8,0,.8],[0,.8,0,.8,0],[0,0,0,0,0]].map(p=>st(H(...p),300)));
-const one=k=>{const o={T:0,I:0,M:0,R:0,P:0};o[k]=.9;return full(o)};
+  SW.map((p,i)=>st(H(...p,{E:.7,L:.5,X:i%2?.9:.4,S:i%2?.7:.2}),320)).concat([st(H(0,0,0,0,0),0)]));
 add('Motions',['drum fingers','drum','tap table','finger roll','roll fingers'],['I','M','R','P','R','M','I'].map(k=>st(one(k),230)).concat([st(H(0,0,0,0,0))]));
 add('Motions',['play piano','piano','piano fingers'],
-  [[0,0,0,0,.9],[0,0,0,.9,0],[0,0,.9,0,0],[0,.9,0,0,0],[.9,0,0,0,0],[0,.9,0,0,0],[0,0,.9,0,0],[0,0,0,.9,0],[0,0,0,0,.9],[0,0,0,0,0]].map(p=>st(H(...p),240)));
+  [[0,0,0,0,.9],[0,0,0,.9,0],[0,0,.9,0,0],[0,.9,0,0,0],[.9,0,0,0,0],[0,.9,0,0,0],[0,0,.9,0,0],[0,0,0,.9,0],[0,0,0,0,.9],[0,0,0,0,0]].map((p,i)=>st(H(...p,{E:.45,L:.3,X:.7,S:i/9}),260)));
 add('Motions',['open and close','grab and release','pump','flex hand','squeeze','open close'],
-  [1,0,1,0,1,0].map(v=>st(H(v,v,v,v,v),520)));
-add('Motions',['count to three','count three'],[1,2,3].map(n=>st(H(...CNT[n-1]),700)));
-add('Motions',['count to five','count up','counting','count','count five'],[1,2,3,4,5].map(n=>st(H(...CNT[n-1]),700)));
-add('Motions',['count to ten','count ten','count up to ten'],[1,2,3,4,5,6,7,8,9,10].map(n=>st(H(...CNT[n-1]),650)));
-add('Motions',['countdown','count down','count backwards','blast off'],[5,4,3,2,1].map(n=>st(H(...CNT[n-1]),800)).concat([st(H(1,1,1,1,1),0)]));
-add('Motions',['knock','knock knock','knock on door'],osc(FISTS,'E',.3,.5,3,260).concat([st(H(1,1,1,1,1,{E:.3}))]));
-add('Motions',['flex','show muscle','bicep','strong','power'],[st(H(1,1,1,1,1,{E:.15}),700),st(H(1,1,1,1,1,{E:1}),1400),st(H(1,1,1,1,1,{E:.15}),0)]);
-add('Motions',['wag finger','shake no','nope','no','negative','nah'],osc({T:1,I:0,M:1,R:1,P:1,E:.5},'W',.3,.7,3,260).concat([st(H(1,0,1,1,1,{E:.5}))]));
-add('Motions',['nod','yes','nod yes','agree','yeah','sure'],osc({T:0,I:1,M:1,R:1,P:1},'E',.3,.6,2,380).concat([st(H(0,1,1,1,1))]));
-add('Motions',['cut','snip','cut scissors','scissor cut','snip snip'],[0,.7,0,.7,0,.7,0,.7].map(v=>st(H(1,v,v,1,1),200)).concat([st(H(1,0,0,1,1))]));
+  [1,0,1,0,1,0].map(v=>st(H(v,v,v,v,v,{E:.7,L:.5,X:v?.4:1}),520)));
+add('Motions',['count to three','count three'],[1,2,3].map(n=>st(H(...CNT[n-1],SHOW),700)));
+add('Motions',['count to five','count up','counting','count','count five'],[1,2,3,4,5].map(n=>st(H(...CNT[n-1],SHOW),700)));
+add('Motions',['count to ten','count ten','count up to ten'],[1,2,3,4,5,6,7,8,9,10].map(n=>st(H(...CNT[n-1],SHOW),650)));
+add('Motions',['countdown','count down','count backwards','blast off'],[5,4,3,2,1].map(n=>st(H(...CNT[n-1],SHOW),800)).concat([st(H(1,1,1,1,1,{E:1,L:1}),0)]));
+add('Motions',['knock','knock knock','knock on door'],osc({T:1,I:1,M:1,R:1,P:1,L:.5,X:1},'E',.3,.75,3,260).concat([st(H(1,1,1,1,1,{E:.3,L:.5,X:1}))]));
+add('Motions',['flex','show muscle','bicep','strong','power'],
+  [st(H(1,1,1,1,1,{E:.2,L:.3}),700),st(H(1,1,1,1,1,{E:1,L:.9,S:.5}),1500),st(H(1,1,1,1,1,{E:1,L:1,S:.5,X:.3}),700),st(H(1,1,1,1,1,{E:1,L:.9,S:.5}),600),st(H(0,0,0,0,0),0)]);
+add('Motions',['wag finger','shake no','nope','no','negative','nah'],
+  SEQ({T:1,I:0,M:1,R:1,P:1,E:.9,L:.7,X:.4},[{E:.5,L:.3},{S:.05},{S:.8},{S:.05},{S:.8},{S:.05},{S:.8},{S:.4}],280));
+add('Motions',['nod','yes','nod yes','agree','yeah','sure'],osc({T:0,I:1,M:1,R:1,P:1,L:.5,X:.5},'E',.4,.95,3,330).concat([st(H(0,1,1,1,1,{E:.7,L:.5}))]));
+add('Motions',['cut','snip','cut scissors','scissor cut','snip snip'],[0,.7,0,.7,0,.7,0,.7].map((v,i)=>st(H(1,v,v,1,1,{E:.7,L:.5,X:i%2?.5:1}),210)).concat([st(H(1,0,0,1,1,{E:.7,L:.5,X:1}))]));
 add('Motions',['rock paper scissors','play rock paper scissors','rps','lets play'],[],{fn:()=>{
-  const p=[['rock',H(1,1,1,1,1)],['paper',H(0,0,0,0,0)],['scissors',H(1,0,0,1,1)]][Math.floor(Math.random()*3)];
-  return{steps:osc(FISTS,'E',.25,.55,3,330).concat([st(p[1])]),label:'Rock paper scissors \u2192 '+p[0]}}});
+  const p=[['rock',H(1,1,1,1,1,{E:.7,L:.4,X:.6})],['paper',H(0,0,0,0,0,{E:.7,L:.4,X:.6})],['scissors',H(1,0,0,1,1,{E:.7,L:.4,X:.6})]][Math.floor(Math.random()*3)];
+  return{steps:osc({T:1,I:1,M:1,R:1,P:1,L:.4,X:.6},'E',.2,.95,3,340).concat([st(p[1])]),label:'Rock paper scissors \u2192 '+p[0]}}});
 add('Motions',['dance','party','boogie','groove'],
-  [H(1,0,1,1,0,{W:.2,E:.4}),H(0,0,0,0,0,{W:.8,E:.6}),H(1,0,0,1,1,{W:.2,E:.4}),H(0,1,1,1,0,{W:.8,E:.6}),H(1,0,1,1,0,{W:.2,E:.5}),H(0,0,0,0,0)].map(p=>st(p,450)));
+  [H(1,0,1,1,0,{S:.1,E:.5,L:.6}),H(0,0,0,0,0,{S:.9,E:1,L:.2}),H(1,0,0,1,1,{S:.1,E:.7,L:1}),H(0,1,1,1,0,{S:.9,E:1,L:.3,X:.6}),H(1,0,1,1,0,{S:.1,E:.6,L:.9,X:1}),H(0,0,0,0,0,{S:.9,E:.9,L:.5}),H(0,0,0,0,0)].map(p=>st(p,480)));
 add('Motions',['celebrate','celebration','hooray','yay','victory dance','congratulations'],
-  [H(1,0,0,1,1,{E:.6}),H(1,0,1,1,0,{E:.6}),H(0,1,1,1,1,{E:.6}),H(0,0,0,0,0,{E:.6,W:.2}),H(0,0,0,0,0,{E:.6,W:.8}),H(0,0,0,0,0)].map(p=>st(p,500)));
+  [H(1,0,0,1,1,{E:.8,L:.6}),H(1,0,1,1,0,{E:1,L:1,S:.1}),H(0,1,1,1,1,{E:1,L:1,S:.9}),H(0,0,0,0,0,{E:1,L:1,S:.1}),H(0,0,0,0,0,{E:1,L:1,S:.9}),H(0,0,0,0,0,{E:1,L:1,S:.1,X:.7}),H(0,0,0,0,0,{E:.6,L:.5}),H(0,0,0,0,0)].map(p=>st(p,520)));
 add('Motions',['warm up','exercise','stretch','workout'],
-  [H(1,1,1,1,1),H(0,0,0,0,0),H(1,1,1,1,1),H(0,0,0,0,0,{W:0}),H(0,0,0,0,0,{W:1}),H(0,0,0,0,0,{E:.6}),H(0,0,0,0,0)].map(p=>st(p,600)));
-add('Motions',['spin wrist','rotate wrist','twist wrist','wrist spin','wrist circle'],[0,1,0,1,.5].map(v=>st(J({W:v}),620)));
+  [H(1,1,1,1,1,{E:.4,L:.3}),H(0,0,0,0,0,{E:.8,X:1}),H(1,1,1,1,1,{E:1,L:.8}),H(0,0,0,0,0,{L:1,S:.1,X:.5}),H(0,0,0,0,0,{L:1,S:.9,X:.5}),H(0,0,0,0,0,{E:.8,X:1,L:.4}),H(0,0,0,0,0)].map(p=>st(p,650)));
+add('Motions',['spin wrist','rotate wrist','twist wrist','wrist spin','wrist circle'],[.35,.65,.35,.65,.5].map(v=>st(J({W:v}),620)));
 add('Motions',['robot','robot mode','be a robot','robot dance'],
-  [{E:.3},{E:.3,L:.4},{S:.5,L:.4},{S:.5,L:0,E:.6},{S:0,E:0}].map(s=>st(full(Object.assign({T:.5,I:.5,M:.5,R:.5,P:.5},s)),650)));
+  [{E:.3},{E:.3,L:.7},{S:.7,L:.7},{S:.7,L:.1,E:.9},{X:1,E:.9},{X:.2,E:.3,S:.2,L:.5},{S:0,E:0,X:0,L:0}].map(s=>st(full(Object.assign({T:.5,I:.5,M:.5,R:.5,P:.5},s)),700)));
 add('Motions',['pick up','pick up object','grab object','pickup'],
-  [H(0,0,0,0,0,{E:.6}),H(0,0,0,0,0,{E:.8}),H(.9,.9,.9,.9,.9,{E:.8}),H(.9,.9,.9,.9,.9,{E:.3})].map(p=>st(p,800)));
+  [H(0,0,0,0,0,{E:.2,X:.3}),H(0,0,0,0,0,{E:.15,X:1,L:.2}),H(.95,.95,.95,.95,.95,{E:.15,X:1,L:.2}),H(.95,.95,.95,.95,.95,{E:.95,X:.3,L:.6,S:.3})].map(p=>st(p,850)));
 add('Motions',['cheers','toast','pour','drink'],
-  [H(.8,.8,.8,.8,.8,{E:.4}),H(.8,.8,.8,.8,.8,{E:.7}),H(.8,.8,.8,.8,.8,{E:.7,W:.9}),H(.8,.8,.8,.8,.8,{E:.7,W:.5}),H(0,0,0,0,0)].map(p=>st(p,700)));
-add('Motions',['angry','shake fist','mad','furious'],osc({T:1,I:1,M:1,R:1,P:1,E:.5},'W',.3,.7,4,200).concat([st(H(1,1,1,1,1))]));
+  [H(.8,.8,.8,.8,.8,{E:.4,X:.4}),H(.8,.8,.8,.8,.8,{E:.95,L:.6,X:.7}),H(.8,.8,.8,.8,.8,{E:.95,L:.6,X:.7,S:.9}),H(.8,.8,.8,.8,.8,{E:.95,L:.6,X:.7,S:.2}),H(.8,.8,.8,.8,.8,{E:.7,L:.4}),H(0,0,0,0,0)].map(p=>st(p,720)));
+add('Motions',['angry','shake fist','mad','furious'],
+  SEQ({T:1,I:1,M:1,R:1,P:1,L:.8},[{E:.5,S:.1},{E:1,S:.7},{E:.5,S:.1},{E:1,S:.7},{E:.5,S:.1},{E:1,S:.7}],200).concat([st(H(1,1,1,1,1))]));
+add('Motions',['shrug','i dont know','dunno','who knows','not sure'],
+  SEQ({T:.1,I:.1,M:.1,R:.1,P:.1,E:.55,X:.7,S:1},[{},{L:.9},{L:0},{L:.9},{L:0}],450));
+add('Motions',['fist pump','yes yes','success','nailed it'],
+  SEQ({T:1,I:1,M:1,R:1,P:1,L:.6},[{E:.3},{E:1,L:.9},{E:.3},{E:1,L:.9},{E:.3,L:.2}],380));
+add('Motions',['ta da','tada','present','introducing','showtime'],
+  SEQ({T:0,I:0,M:0,R:0,P:0},[{E:.4,L:.2,X:.6,S:1},{E:.8,L:.9,X:.8,S:1},{E:.8,L:1,X:.8,S:.4},{E:.3,L:0,X:0,S:0}],600));
 
-add('Arm',['raise arm','lift arm','arm up','raise hand','lift up','raise'],J({L:1}));
+/* ---- Arm: slider-space joints. L=sideways lift (D21) E=forearm (D5) S=bicep/shoulder turn (D19) X=reach/extend (D18) ---- */
+add('Arm',['raise arm','lift arm','arm up','raise hand','lift up','raise','lift shoulder','raise shoulder','lift shoulder sideways','lift bicep sideways','lift bicep','raise bicep'],J({L:1}));
 add('Arm',['raise half','half raise','lift half','arm halfway'],J({L:.5}));
-add('Arm',['lower arm','arm down','put arm down','lower hand','lower'],J({L:0}));
-add('Arm',['arm forward','arm front','reach forward','reach out','reach'],J({L:.35,E:0}));
-add('Arm',['arm side','t pose','arm out','arm sideways','arms out'],J({L:1,S:.5,E:0}));
-add('Arm',['arm back','pull back','arm behind'],J({S:0,L:.2}));
+add('Arm',['lower arm','arm down','put arm down','lower hand','lower','lower shoulder','lower bicep','lower shoulder sideways','lower bicep sideways'],J({L:0}));
+add('Arm',['lift forearm','raise forearm','forearm up'],J({E:1}));
+add('Arm',['lower forearm','forearm down','drop forearm'],J({E:0}));
+add('Arm',['reach me','reach','reach forward','reach out','arm forward','arm front','extend shoulder forward','extend forward','shoulder forward','stretch out','extend arm'],J({X:1}));
+add('Arm',['retract','retract joint','pull back','arm back','arm behind','extend zero','extend reset','retract arm','pull in'],J({X:0}));
+add('Arm',['arm side','t pose','arm out','arm sideways','arms out'],J({L:1,S:0,E:0}));
+add('Arm',['turn shoulder','turn bicep','rotate bicep','twist shoulder','turn upper arm'],J({S:1}));
+add('Arm',['turn shoulder back','turn bicep back','unturn shoulder','untwist shoulder','shoulder normal'],J({S:0}));
 add('Arm',['bend elbow','bend arm','fold arm','elbow in','elbow bend'],J({E:.6}));
 add('Arm',['elbow half','half bend','elbow halfway'],J({E:.5}));
 add('Arm',['elbow full','fully bend elbow','elbow max','full bend'],J({E:1}));
@@ -2977,16 +3022,15 @@ add('Arm',['shoulder reset','shoulder zero','shoulder start'],J({S:0}));
 add('Arm',['shoulder full','shoulder max'],J({S:1}));
 add('Arm',['extend joint','extend half','extend joint half'],J({X:.5}));
 add('Arm',['extend full','extend max','extend joint full'],J({X:1}));
-add('Arm',['retract','retract joint','extend zero','extend reset'],J({X:0}));
 add('Arm',['wrist left','turn wrist left','rotate wrist left','wrist anticlockwise'],J({W:.2}));
 add('Arm',['wrist right','turn wrist right','rotate wrist right','wrist clockwise'],J({W:.8}));
 add('Arm',['wrist center','wrist flat','wrist straight','center wrist','level wrist'],J({W:.5}));
 add('Arm',['wrist full left','wrist max left','wrist left full'],J({W:0}));
 add('Arm',['wrist full right','wrist max right','wrist right full'],J({W:1}));
-add('Arm',['point left','pointing left','point to the left'],H(1,0,1,1,1,{S:.2,L:.6}));
-add('Arm',['point right','pointing right','point to the right'],H(1,0,1,1,1,{S:.8,L:.6}));
-add('Arm',['point up','pointing up','point to the sky','point sky'],H(1,0,1,1,1,{L:1}));
-add('Arm',['point down','pointing down','point to the floor','point floor'],H(1,0,1,1,1,{L:0,E:.3}));
+add('Arm',['point left','pointing left','point to the left'],H(1,0,1,1,1,{S:.2,L:.9,E:.2,X:1}));
+add('Arm',['point right','pointing right','point to the right'],H(1,0,1,1,1,{S:.8,L:.9,E:.2,X:1}));
+add('Arm',['point up','pointing up','point to the sky','point sky'],H(1,0,1,1,1,{L:1,E:.4}));
+add('Arm',['point down','pointing down','point to the floor','point floor'],H(1,0,1,1,1,{L:0,E:0,X:.8}));
 
 add('Control',['rest','reset','home','go home','default','neutral','relax','rest position','zero','initial position','start position','normal'],REST,{label:'Rest position'});
 add('Control',['stop','halt','freeze','cancel','abort','enough','stay'],[],{fn:()=>{token++;return{none:true,label:'Stopped'}}});
@@ -3013,11 +3057,11 @@ function getCode(){
 function send(pose){
   const run=chain.catch(()=>{}).then(async()=>{
     const code=getCode();if(!code)throw new Error('Device code needed');
-    const fields={};Object.keys(pose).forEach(id=>{if(FIELD[id]&&pose[id]!=null&&isFinite(pose[id]))fields[FIELD[id]]=toMotor(id,pose[id])});
+    const fields={};Object.keys(pose).forEach(id=>{if(FIELD[id]&&pose[id]!=null&&isFinite(pose[id])){fields[FIELD[id]]=toMotor(id,pose[id])}});
     const write=()=>db.ref('users/'+code+'/command').set(Object.assign({name:'finger_angles'},fields,{ts:firebase.database.ServerValue.TIMESTAMP}));
     try{if(auth.authStateReady)await auth.authStateReady()}catch(e){}
     if(!auth.currentUser)throw new Error('Not signed in on this site \u2013 sign in on the main page first');
-    await write();
+    await write();Object.assign(live,pose);
     return fields;
   });
   chain=run;return run;
@@ -3131,7 +3175,7 @@ function param(t){
   while((m=JSPEC.exec(T))){
     const id=JN[m[1].replace(/\s+/g,' ')],v=Math.max(0,parseInt(m[2],10)),unit=m[3]||'',deg=/deg/.test(unit)||(!unit&&v>100);
     const ids=id==='ALL'?['thumb','index','middle','ring','pinky']:[id];
-    ids.forEach(j=>{pose[j]=deg?Math.round(uiFromMotor(j,v)*10)/10:F(j,Math.min(100,v)/100)});
+    ids.forEach(j=>{pose[j]=deg?Math.round(uiFromMotor(j,j==='wrist-slider'?Math.max(45,Math.min(95,v)):v)*10)/10:F(j,Math.min(100,v)/100)});
     labs.push(m[1]+' '+v+(deg?'\u00b0':'%'));
   }
   if(!labs.length)return null;
@@ -3164,7 +3208,37 @@ function fuzzyExact(A){
   if(best&&bestScore>=.70&&(bestScore-second>=.035||bestScore>=.88))return{cmd:best.cmd,score:bestScore};
   return null;
 }
+const RELNAME={'arm-slider':'Forearm','abduction-slider':'Shoulder lift','shoulder-slider':'Shoulder turn','extend-slider':'Extend'};
+function rel(A){
+  const T=digits(numWords(A));
+  if(/\b(?:degrees?|deg)\b/.test(T))return null;
+  if(/\b(?:wrist|fingers?|thumbs?|index|middle|ring|pinky|pinkie|point|pointing|wave|salute)\b/.test(T))return null;
+  const fore=/\b(?:fore ?arm|elbow)\b/.test(T);
+  const body=/\b(?:shoulder|bicep|biceps|upper arm|arm)\b/.test(T);
+  const turn=/\b(?:turn|rotate|twist|spin)\b/.test(T);
+  const reach=/\b(?:reach|extend|extension|retract|forward|forwards)\b/.test(T);
+  const verb=/\b(?:lift|raise|lower|drop)\b/.test(T);
+  const upDown=/\b(?:up|down|sideways|side)\b/.test(T);
+  let id=null;
+  if(fore&&(verb||upDown||/\bstraighten\b/.test(T)))id='arm-slider';
+  else if(reach&&!turn)id='extend-slider';
+  else if(body&&turn&&!/\b(?:left|right)\b/.test(T))id='shoulder-slider';
+  else if(!fore&&!turn&&!reach&&(verb||(body&&upDown)))id='abduction-slider';
+  if(!id)return null;
+  const neg=/\b(?:lower|drop|down|retract|back|backward|backwards|untwist|unturn|straighten|decrease|reduce)\b/.test(T);
+  let pct=100,m;
+  if((m=/(\d{1,3})\s*(?:%|percent|per cent)/.exec(T)||/\b(\d{1,3})\b/.exec(T)))pct=Math.min(100,+m[1]);
+  else if(/\bhalf\b/.test(T))pct=50;else if(/\bquarter\b/.test(T))pct=25;
+  const dir=neg?-1:1,lab=RELNAME[id]+(dir>0?' +':' \u2212')+pct+'%';
+  const cmd={cat:'Joint',names:[lab],label:lab,steps:[],fn:ctx=>{
+    const base=Object.assign({},live,(ctx&&ctx.cur)||{}),u=CAL[id].ui;
+    const f0=c01((base[id]-u[0])/(u[1]-u[0])),f1=c01(f0+dir*pct/100);
+    return{steps:[st({[id]:u[0]+(u[1]-u[0])*f1})],label:lab+' \u2192 '+Math.round(f1*100)+'%'};
+  }};
+  return{cmd,n:1,spd:1,score:.99};
+}
 function single(A){
+  const rr=rel(A);if(rr)return rr;
   const {cands,C}=strip(A);let c;
   for(const x of cands)if(c=exact(x))return{cmd:c,n:1,spd:1,score:.99};
   let n=1,spd=1,D=C;
